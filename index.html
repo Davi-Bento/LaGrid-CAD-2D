@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LineTrack CAD — Pista Seguidor de Linha</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Barlow+Condensed:wght@300;400;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- TOP BAR -->
+  <header id="topbar">
+    <div id="logo-area">
+      <div id="logo-mark">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+          <path d="M4 14 Q4 4 14 4 Q24 4 24 14 Q24 24 14 24" stroke="var(--accent)" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+          <path d="M14 24 Q4 24 4 14" stroke="var(--accent2)" stroke-width="2.5" fill="none" stroke-linecap="round"/>
+          <circle cx="14" cy="14" r="2.5" fill="var(--accent)"/>
+        </svg>
+      </div>
+      <div id="logo-text">
+        <span class="logo-main">LineTrack</span>
+        <span class="logo-sub">CAD 2D</span>
+      </div>
+    </div>
+
+    <nav id="menu-bar">
+      <div class="menu-group">
+        <button class="menu-btn">Arquivo</button>
+        <div class="menu-dropdown">
+          <button data-action="new">Novo <span class="kbd">Ctrl+N</span></button>
+          <button data-action="save">Salvar JSON <span class="kbd">Ctrl+S</span></button>
+          <button data-action="load">Abrir JSON <span class="kbd">Ctrl+O</span></button>
+          <hr/>
+          <button data-action="export-pdf">Exportar PDF…</button>
+        </div>
+      </div>
+      <div class="menu-group">
+        <button class="menu-btn">Editar</button>
+        <div class="menu-dropdown">
+          <button data-action="undo">Desfazer <span class="kbd">Ctrl+Z</span></button>
+          <button data-action="redo">Refazer <span class="kbd">Ctrl+Y</span></button>
+          <hr/>
+          <button data-action="select-all">Selecionar Tudo <span class="kbd">Ctrl+A</span></button>
+          <button data-action="delete-sel">Excluir Seleção <span class="kbd">Del</span></button>
+        </div>
+      </div>
+      <div class="menu-group">
+        <button class="menu-btn">Análise</button>
+        <div class="menu-dropdown">
+          <button data-action="dijkstra">Calcular Comprimento da Pista <span class="kbd">F5</span></button>
+          <button data-action="clear-path">Limpar Destaque</button>
+        </div>
+      </div>
+      <div class="menu-group">
+        <button class="menu-btn">Vista</button>
+        <div class="menu-dropdown">
+          <button data-action="fit-view">Encaixar Vista <span class="kbd">F</span></button>
+          <button data-action="toggle-grid">Grade <span class="kbd">G</span></button>
+          <button data-action="clear-grid">Limpar Grade</button>
+          <button data-action="toggle-snap">Snap <span class="kbd">S</span></button>
+          <button data-action="toggle-crit">Alertas Raio Crítico</button>
+        </div>
+      </div>
+    </nav>
+
+    <div id="topbar-right">
+      <div id="coord-display">
+        <span class="coord-label">X</span><span id="coord-x">0.0</span>
+        <span class="coord-label">Y</span><span id="coord-y">0.0</span>
+        <span class="coord-unit">cm</span>
+      </div>
+      <div id="zoom-display">
+        <span id="zoom-label">100%</span>
+        <button id="btn-zoom-reset" title="Resetar zoom (Home)">⌂</button>
+      </div>
+    </div>
+  </header>
+
+  <!-- TOOLBAR LATERAL -->
+  <aside id="toolbar">
+    <div class="tool-section">
+      <div class="tool-section-label">SEL</div>
+      <button class="tool-btn active" id="tool-select" data-tool="select" title="Seleção (V)">
+        <svg viewBox="0 0 20 20"><path d="M4 2 L4 16 L8 12 L11 18 L13 17 L10 11 L15 11 Z" fill="currentColor"/></svg>
+        <span>V</span>
+      </button>
+    </div>
+
+    <div class="tool-section">
+      <div class="tool-section-label">DRW</div>
+      <button class="tool-btn" id="tool-line" data-tool="line" title="Linha (L)">
+        <svg viewBox="0 0 20 20"><line x1="3" y1="17" x2="17" y2="3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <span>L</span>
+      </button>
+      <button class="tool-btn" id="tool-arc" data-tool="arc" title="Arco 3 Pontos (A)">
+        <svg viewBox="0 0 20 20"><path d="M3 16 Q10 2 17 16" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+        <span>A</span>
+      </button>
+      <button class="tool-btn" id="tool-fillet" data-tool="fillet" title="Round/Fillet (R)">
+        <svg viewBox="0 0 20 20"><path d="M4 16 L4 7 Q4 4 7 4 L16 4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+        <span>R</span>
+      </button>
+    </div>
+
+    <div class="tool-section">
+      <div class="tool-section-label">NÓS</div>
+      <button class="tool-btn" id="tool-start" data-tool="start-node" title="Nó Início (1)">
+        <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7" stroke="#00ff87" stroke-width="2" fill="none"/><text x="10" y="14" text-anchor="middle" font-size="8" fill="#00ff87" font-family="monospace">S</text></svg>
+        <span>1</span>
+      </button>
+      <button class="tool-btn" id="tool-end" data-tool="end-node" title="Nó Chegada (2)">
+        <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7" stroke="#ff4757" stroke-width="2" fill="none"/><text x="10" y="14" text-anchor="middle" font-size="8" fill="#ff4757" font-family="monospace">E</text></svg>
+        <span>2</span>
+      </button>
+    </div>
+
+    <div class="tool-section">
+      <div class="tool-section-label">EDT</div>
+      <button class="tool-btn" id="tool-move" data-tool="move" title="Mover com Precisão (M)">
+        <svg viewBox="0 0 20 20"><path d="M10 3 L10 17 M3 10 L17 10 M10 3 L7 6 M10 3 L13 6 M10 17 L7 14 M10 17 L13 14 M3 10 L6 7 M3 10 L6 13 M17 10 L14 7 M17 10 L14 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <span>M</span>
+      </button>
+    </div>
+
+    <div class="tool-divider"></div>
+
+    <!-- Undo/Redo com ícones SVG de seta reais -->
+    <button class="tool-btn" id="btn-undo" title="Desfazer (Ctrl+Z)">
+      <svg viewBox="0 0 20 20" fill="none">
+        <path d="M3 8 C3 4.5 6 2 10 2 C14 2 17 5 17 9 C17 13 14 16 10 16 C7.5 16 5.5 15 4 13.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        <polyline points="3,4 3,9 8,9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      </svg>
+      <span>Z</span>
+    </button>
+    <button class="tool-btn" id="btn-redo" title="Refazer (Ctrl+Y)">
+      <svg viewBox="0 0 20 20" fill="none">
+        <path d="M17 8 C17 4.5 14 2 10 2 C6 2 3 5 3 9 C3 13 6 16 10 16 C12.5 16 14.5 15 16 13.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+        <polyline points="17,4 17,9 12,9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      </svg>
+      <span>Y</span>
+    </button>
+
+    <div class="tool-divider"></div>
+
+    <button class="tool-btn tool-danger" id="btn-delete-sel" title="Excluir Seleção (Del)">
+      <svg viewBox="0 0 20 20"><path d="M5 5 L15 15 M15 5 L5 15" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <span>Del</span>
+    </button>
+  </aside>
+
+  <!-- CANVAS PRINCIPAL -->
+  <main id="canvas-area">
+    <canvas id="main-canvas"></canvas>
+
+    <!-- HUD Linha — Distância e Ângulo (foco isolado) -->
+    <div id="polar-hud" class="hud-panel hidden">
+      <div class="hud-title">ENTRADA POLAR</div>
+      <div class="hud-row">
+        <label class="hud-label" for="polar-dist-input">Dist (cm)</label>
+        <input type="number" id="polar-dist-input" class="hud-input" step="0.1" min="0" placeholder="0.0" />
+      </div>
+      <div class="hud-row" style="margin-top:6px">
+        <label class="hud-label" for="polar-angle-input">Ângulo (°)</label>
+        <input type="number" id="polar-angle-input" class="hud-input" step="1" placeholder="0" />
+      </div>
+      <div class="hud-actions">
+        <button id="polar-cancel-btn" class="hud-btn">Esc</button>
+        <button id="polar-confirm-btn" class="hud-btn primary">Enter ↵</button>
+      </div>
+      <div class="hud-hint">Preencha e confirme · ou clique no canvas</div>
+    </div>
+
+    <!-- HUD Fillet/Round -->
+    <div id="fillet-hud" class="hud-panel hidden">
+      <div class="hud-title">ROUND / FILLET</div>
+      <div class="hud-row">
+        <label class="hud-label" for="fillet-radius">Raio (cm)</label>
+        <input type="number" id="fillet-radius" class="hud-input" value="2" step="0.1" min="0.1" />
+      </div>
+      <div class="hud-hint">Clique no vértice para aplicar · Esc cancela</div>
+    </div>
+
+    <!-- HUD Mover Precisão -->
+    <div id="move-hud" class="hud-panel hidden">
+      <div class="hud-title">MOVER COM PRECISÃO</div>
+      <div class="hud-row">
+        <label class="hud-label" for="move-dist-input">Dist (cm)</label>
+        <input type="number" id="move-dist-input" class="hud-input" step="0.1" min="0" placeholder="0.0" />
+      </div>
+      <div class="hud-row" style="margin-top:6px">
+        <label class="hud-label" for="move-angle-input">Ângulo (°)</label>
+        <input type="number" id="move-angle-input" class="hud-input" step="1" placeholder="0" />
+      </div>
+      <div class="hud-actions">
+        <button id="move-cancel-btn" class="hud-btn">Cancelar</button>
+        <button id="move-confirm-btn" class="hud-btn primary">Aplicar ↵</button>
+      </div>
+    </div>
+
+    <!-- Status bar -->
+    <div id="status-bar">
+      <span id="status-tool">SELECIONAR</span>
+      <span id="status-msg">Pronto — use os atalhos para desenhar</span>
+      <span id="status-sel"></span>
+      <div id="status-right">
+        <button id="btn-toggle-grid" class="status-toggle active" title="G">GRADE</button>
+        <button id="btn-toggle-snap" class="status-toggle active" title="S">SNAP</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- PAINEL DIREITO -->
+  <aside id="panel-right">
+
+    <!-- Área de Trabalho -->
+    <div class="panel-section">
+      <div class="panel-title">Área de Trabalho</div>
+      <div class="prop-row">
+        <label class="prop-label">Largura (cm)</label>
+        <input type="number" id="workspace-w" class="prop-input" value="200" step="10" min="10" />
+      </div>
+      <div class="prop-row">
+        <label class="prop-label">Altura (cm)</label>
+        <input type="number" id="workspace-h" class="prop-input" value="150" step="10" min="10" />
+      </div>
+      <button id="btn-apply-workspace" class="panel-btn" style="margin-top:4px">Aplicar</button>
+    </div>
+
+    <!-- Largura da Linha -->
+    <div class="panel-section">
+      <div class="panel-title">Espessura da Linha</div>
+      <div class="prop-row">
+        <label class="prop-label">Largura (cm)</label>
+        <input type="number" id="line-width-input" class="prop-input" value="1.9" step="0.1" min="0.1" />
+      </div>
+      <div class="hud-hint" style="margin-top:4px;font-size:10px">Padrão: 1.9 cm (faixa seguidor)</div>
+    </div>
+
+    <!-- Info -->
+    <div class="panel-section">
+      <div class="panel-title">Informações</div>
+      <div class="info-row"><span class="info-label">Segmentos</span><span class="info-val" id="info-seg-count">0</span></div>
+      <div class="info-row"><span class="info-label">Comprimento total</span><span class="info-val" id="info-total-len">0.0 cm</span></div>
+      <div class="info-row"><span class="info-label">Alertas críticos</span><span class="info-val warn" id="info-crit-count">0</span></div>
+    </div>
+
+    <!-- Seleção -->
+    <div class="panel-section">
+      <div class="panel-title">Seleção</div>
+      <div id="sel-empty" class="panel-empty">Nenhum elemento selecionado</div>
+      <div id="sel-props" class="hidden">
+        <div class="info-row"><span class="info-label">Tipo</span><span class="info-val" id="sel-type">—</span></div>
+        <div class="info-row"><span class="info-label">Comprimento</span><span class="info-val" id="sel-len">—</span></div>
+        <div id="sel-line-controls">
+          <div class="prop-row" style="margin-top:8px">
+            <label class="prop-label">Redimensionar (cm)</label>
+            <div class="prop-input-row">
+              <input type="number" id="sel-resize-val" class="prop-input" step="0.1" />
+              <button id="sel-resize-apply" class="prop-btn">✓</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Dijkstra / Comprimento da Pista -->
+    <div class="panel-section">
+      <div class="panel-title">Comprimento da Pista</div>
+      <div class="prop-row">
+        <label class="prop-label">Início (no segmento)</label>
+        <span class="info-val" id="dijk-start" style="color:var(--node-start)">Não definido</span>
+      </div>
+      <div class="prop-row">
+        <label class="prop-label">Chegada (no segmento)</label>
+        <span class="info-val" id="dijk-end" style="color:var(--node-end)">Não definido</span>
+      </div>
+      <button id="btn-dijkstra" class="panel-btn primary">Calcular <span class="kbd">F5</span></button>
+      <div id="dijk-result" class="hidden">
+        <div class="info-row" style="margin-top:8px">
+          <span class="info-label">Distância</span>
+          <span class="info-val accent" id="dijk-dist">—</span>
+        </div>
+        <div class="info-row">
+          <span class="info-label">Segmentos</span>
+          <span class="info-val" id="dijk-segs">—</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Exportação -->
+    <div class="panel-section">
+      <div class="panel-title">Exportação PDF</div>
+      <div class="prop-row">
+        <label class="prop-label">Formato</label>
+        <select id="exp-format" class="prop-select">
+          <option value="A4">A4 (21×29.7cm)</option>
+          <option value="A3">A3 (29.7×42cm)</option>
+          <option value="A2">A2 (42×59.4cm)</option>
+          <option value="A1">A1 (59.4×84.1cm)</option>
+          <option value="A0">A0 (84.1×118.9cm)</option>
+          <option value="auto">Bounding Box Auto</option>
+        </select>
+      </div>
+      <div class="prop-row">
+        <label class="prop-label">Margem (cm)</label>
+        <input type="number" id="exp-margin" class="prop-input" value="2" min="0" max="10" step="0.5" />
+      </div>
+      <div class="prop-row prop-check">
+        <input type="checkbox" id="exp-invert" />
+        <label for="exp-invert" class="prop-label">Inverter cores (fundo preto)</label>
+      </div>
+      <div class="prop-row prop-check">
+        <input type="checkbox" id="exp-cotas" checked />
+        <label for="exp-cotas" class="prop-label">Cotas automáticas (&gt;1.5cm)</label>
+      </div>
+      <button id="btn-export-pdf" class="panel-btn primary">Exportar PDF</button>
+    </div>
+  </aside>
+
+  <!-- INPUT OCULTO PARA JSON -->
+  <input type="file" id="file-input" accept=".json" style="display:none" />
+
+  <script src="app.js"></script>
+</body>
+</html>
