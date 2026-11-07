@@ -10,6 +10,7 @@ const SNAP_MAG_PX   = 14;       // raio magnético em pixels de tela
 const CRIT_ANGLE    = 90;       // alerta raio crítico (graus)
 const MIN_COTA_CM   = 1.5;      // mínimo para desenhar cota automática
 const DEFAULT_LINE_W = 1.9;     // cm — largura padrão de faixa
+const ANGLE_STEP_DEFAULT = 15;  // graus — snap angular configurável
 
 // ── ESTADO ────────────────────────────────────────────────
 const state = {
@@ -24,6 +25,8 @@ const state = {
   showGrid:      true,
   snapEnabled:   true,
   showCritical:  true,
+  angleSnap:     false,               // snap angular ligado/desligado
+  angleStep:     ANGLE_STEP_DEFAULT,  // passo do snap angular (graus)
 };
 
 const cam = { x: 0, y: 0, scale: 1 };
@@ -32,6 +35,9 @@ const ui = {
   tool:         'select',
   lineStart:    null,
   arcPoints:    [],
+  polyPoints:   [],   // pontos da polilinha em construção
+  rectStart:    null, // 1º canto do retângulo
+  circleCenter: null, // centro do círculo em construção
   mouseWorld:   { x: 0, y: 0 },
   mouseScreen:  { x: 0, y: 0 },
   selection:    new Set(),
@@ -40,6 +46,11 @@ const ui = {
   panStart:     { x: 0, y: 0 },
   camStart:     { x: 0, y: 0 },
   snapTarget:   null,   // ponto magnético atual {x,y}
+  shiftKey:     false,  // ortho (Shift) durante o desenho
+  dragVertex:   null,   // {segId, idx} — vértice sendo arrastado
+  mirrorPts:    [],     // eixo do espelho em construção
+  offsetTargetId: null, // objeto escolhido para offset
+  coordMode:    'abs',  // 'abs' | 'rel'
 };
 
 // ── CANVAS ───────────────────────────────────────────────
@@ -66,23 +77,26 @@ function s2w(sx, sy) {
 function cm2px(cm) { return cm * PX_PER_CM * cam.scale; }
 
 // ── PONTOS MAGNÉTICOS ─────────────────────────────────────
-// Coleta todos os endpoints de todos os segmentos
+// Coleta todos os pontos magnéticos (endpoints e vértices internos)
 function getAllEndpoints() {
   const pts = [];
   for (const seg of state.segments) {
-    const eps = segEndpoints(seg);
-    for (const ep of eps) pts.push({ x: ep.x, y: ep.y, segId: seg.id });
+    const verts = segSnapPoints(seg);
+    for (let i = 0; i < verts.length; i++) {
+      const v = verts[i];
+      pts.push({ x: v.x, y: v.y, segId: seg.id, idx: i });
+    }
   }
-  // midpoints de arcos também são pontos de controle relevantes
   return pts;
 }
 
 // Retorna ponto magnético mais próximo (em px de tela) ou null
-function getMagneticSnap(sx, sy) {
+function getMagneticSnap(sx, sy, exclude) {
   if (!state.snapEnabled) return null;
   const pts = getAllEndpoints();
   let best = null, bestD = Infinity;
   for (const pt of pts) {
+    if (exclude && pt.segId === exclude.segId && pt.idx === exclude.idx) continue;
     const sp = w2s(pt.x, pt.y);
     const d  = Math.hypot(sp.x - sx, sp.y - sy);
     if (d < SNAP_MAG_PX && d < bestD) {
@@ -101,10 +115,30 @@ function resolvePoint(sx, sy) {
 }
 
 // ── SEGMENT UTILS ─────────────────────────────────────────
+// Tipos: line {points:[a,b]} · arc {points:[a,m,b]} (arco circular por 3 pontos)
+//         polyline {points:[...]} · circle {points:[centro], radius}
 function segEndpoints(seg) {
   if (seg.type === 'line') return [seg.points[0], seg.points[1]];
   if (seg.type === 'arc')  return [seg.points[0], seg.points[2]];
+  if (seg.type === 'polyline') {
+    if (seg.points.length < 2) return [];
+    return [seg.points[0], seg.points[seg.points.length-1]];
+  }
   return [];
+}
+
+// Vértices que podem ser exibidos/editados
+function segSnapPoints(seg) {
+  if (seg.type === 'line') return seg.points.slice(0,2);
+  if (seg.type === 'arc')  return seg.points.slice(0,3);
+  if (seg.type === 'polyline') return seg.points;
+  if (seg.type === 'circle') return seg.points.slice(0,1);
+  return [];
+}
+
+// Lista {idx, pt} dos vértices editáveis
+function segVertices(seg) {
+  return segSnapPoints(seg).map((pt, idx) => ({ idx, pt }));
 }
 
 function segLength(seg) {
@@ -113,25 +147,58 @@ function segLength(seg) {
     return Math.hypot(p1.x - p0.x, p1.y - p0.y);
   }
   if (seg.type === 'arc') return arcLength(seg);
+  if (seg.type === 'polyline') {
+    let len = 0;
+    for (let i = 1; i < seg.points.length; i++) {
+      const a = seg.points[i-1], b = seg.points[i];
+      len += Math.hypot(b.x-a.x, b.y-a.y);
+    }
+    return len;
+  }
+  if (seg.type === 'circle') return 2 * Math.PI * seg.radius;
   return 0;
 }
 
-function arcLength(seg) {
+// Arco circular real definido por 3 pontos (início, meio, fim)
+function arcGeometry(seg) {
+  if (!seg || seg.type !== 'arc' || !seg.points || seg.points.length < 3) return null;
   const [p0, pm, p1] = seg.points;
-  const steps = 60;
-  let len = 0, prev = bqAt(p0, pm, p1, 0);
-  for (let i = 1; i <= steps; i++) {
-    const cur = bqAt(p0, pm, p1, i / steps);
-    len += Math.hypot(cur.x - prev.x, cur.y - prev.y);
-    prev = cur;
-  }
-  return len;
+  const d = 2 * (p0.x*(pm.y-p1.y) + pm.x*(p1.y-p0.y) + p1.x*(p0.y-pm.y));
+  if (Math.abs(d) < 1e-9) return null;
+  const p0s = p0.x*p0.x + p0.y*p0.y;
+  const pms = pm.x*pm.x + pm.y*pm.y;
+  const p1s = p1.x*p1.x + p1.y*p1.y;
+  const cx = (p0s*(pm.y-p1.y) + pms*(p1.y-p0.y) + p1s*(p0.y-pm.y)) / d;
+  const cy = (p0s*(p1.x-pm.x) + pms*(p0.x-p1.x) + p1s*(pm.x-p0.x)) / d;
+  const r  = Math.hypot(p0.x-cx, p0.y-cy);
+  const a0 = Math.atan2(p0.y-cy, p0.x-cx);
+  const am = Math.atan2(pm.y-cy, pm.x-cx);
+  const a1 = Math.atan2(p1.y-cy, p1.x-cx);
+  const TWO = Math.PI * 2;
+  const dAM = ((am - a0) % TWO + TWO) % TWO;
+  const dA1 = ((a1 - a0) % TWO + TWO) % TWO;
+  let sweep;
+  if (dAM <= dA1 + 1e-9) sweep = dA1;
+  else                   sweep = dA1 - TWO;
+  if (Math.abs(sweep) < 1e-9) sweep = TWO;
+  return { cx, cy, r, a0, am, a1, sweep };
 }
 
-function bqAt(p0, p1, p2, t) {
-  const mt = 1 - t;
-  return { x: mt*mt*p0.x + 2*mt*t*p1.x + t*t*p2.x,
-           y: mt*mt*p0.y + 2*mt*t*p1.y + t*t*p2.y };
+function arcPointAt(seg, t) {
+  const g = arcGeometry(seg);
+  if (!g) {
+    const p0 = seg.points[0], p1 = seg.points[2];
+    return { x: p0.x + (p1.x-p0.x)*t, y: p0.y + (p1.y-p0.y)*t };
+  }
+  const a = g.a0 + g.sweep * t;
+  return { x: g.cx + g.r*Math.cos(a), y: g.cy + g.r*Math.sin(a) };
+}
+
+function arcLength(seg) {
+  const g = arcGeometry(seg);
+  if (g) return g.r * Math.abs(g.sweep);
+  const [p0, , p1] = seg.points;
+  return Math.hypot(p1.x-p0.x, p1.y-p0.y);
 }
 
 // Ponto mais próximo em um segmento, retorna {pt, t, dist}
@@ -147,17 +214,45 @@ function closestPointOnSeg(seg, wx, wy) {
     return { pt, t, dist: Math.hypot(wx-pt.x, wy-pt.y) };
   }
   if (seg.type === 'arc') {
-    const [p0, pm, p2] = seg.points;
-    let best = { t: 0, dist: Infinity, pt: p0 };
-    for (let i = 0; i <= 60; i++) {
-      const t  = i / 60;
-      const pt = bqAt(p0, pm, p2, t);
+    let best = { t: 0, dist: Infinity, pt: seg.points[0] };
+    for (let i = 0; i <= 80; i++) {
+      const t  = i / 80;
+      const pt = arcPointAt(seg, t);
       const d  = Math.hypot(wx-pt.x, wy-pt.y);
       if (d < best.dist) best = { t, dist: d, pt };
     }
     return best;
   }
-  return null;
+  if (seg.type === 'polyline') {
+    let best = { t: 0, dist: Infinity, pt: seg.points[0] };
+    let acc = 0;
+    const total = segLength(seg);
+    for (let i = 1; i < seg.points.length; i++) {
+      const a = seg.points[i-1], b = seg.points[i];
+      const dx = b.x-a.x, dy = b.y-a.y;
+      const len2 = dx*dx + dy*dy;
+      const len  = Math.sqrt(len2);
+      let u = len2 > 1e-12 ? ((wx-a.x)*dx + (wy-a.y)*dy)/len2 : 0;
+      u = Math.max(0, Math.min(1, u));
+      const pt = { x: a.x+u*dx, y: a.y+u*dy };
+      const d  = Math.hypot(wx-pt.x, wy-pt.y);
+      if (d < best.dist) {
+        best = { pt, dist: d, t: total > 1e-9 ? (acc + u*len)/total : 0 };
+      }
+      acc += len;
+    }
+    return best;
+  }
+  if (seg.type === 'circle') {
+    const c = seg.points[0];
+    const dx = wx-c.x, dy = wy-c.y;
+    const d  = Math.hypot(dx,dy);
+    if (d < 1e-9) return { pt: { x: c.x+seg.radius, y: c.y }, t: 0, dist: seg.radius };
+    const pt = { x: c.x + dx/d*seg.radius, y: c.y + dy/d*seg.radius };
+    const ang = ((Math.atan2(dy,dx) + Math.PI*2) % (Math.PI*2)) / (Math.PI*2);
+    return { pt, t: ang, dist: Math.abs(d - seg.radius) };
+  }
+  return { pt: { x: wx, y: wy }, t: 0, dist: Infinity };
 }
 
 // Distância de ponto de tela a segmento (px)
@@ -169,16 +264,67 @@ function screenDistToSeg(seg, sx, sy) {
     return distPtToSegPx(sx, sy, sp0.x, sp0.y, sp1.x, sp1.y);
   }
   if (seg.type === 'arc') {
-    const [p0,pm,p2] = seg.points;
     let best = Infinity;
     for (let i = 0; i <= STEPS; i++) {
-      const wp = bqAt(p0, pm, p2, i/STEPS);
+      const wp = arcPointAt(seg, i/STEPS);
       const sp = w2s(wp.x, wp.y);
       best = Math.min(best, Math.hypot(sp.x-sx, sp.y-sy));
     }
     return best;
   }
+  if (seg.type === 'polyline') {
+    let best = Infinity;
+    for (let i = 1; i < seg.points.length; i++) {
+      const a = w2s(seg.points[i-1].x, seg.points[i-1].y);
+      const b = w2s(seg.points[i].x,   seg.points[i].y);
+      best = Math.min(best, distPtToSegPx(sx, sy, a.x, a.y, b.x, b.y));
+    }
+    return best;
+  }
+  if (seg.type === 'circle') {
+    const c = w2s(seg.points[0].x, seg.points[0].y);
+    const r = cm2px(seg.radius);
+    return Math.abs(Math.hypot(sx-c.x, sy-c.y) - r);
+  }
   return Infinity;
+}
+
+// Aplica ortho (Shift) ou snap angular ao ponto em relação a uma origem
+function pointFromConstraint(origin, pt) {
+  if (!origin) return pt;
+  const dx = pt.x - origin.x, dy = pt.y - origin.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist < 1e-9) return pt;
+  let ang = Math.atan2(dy, dx);
+  if (ui.shiftKey) {
+    const q = Math.PI / 2;
+    ang = Math.round(ang / q) * q;
+  } else if (state.angleSnap) {
+    const stepRad = (state.angleStep || ANGLE_STEP_DEFAULT) * Math.PI / 180;
+    ang = Math.round(ang / stepRad) * stepRad;
+  } else {
+    return pt;
+  }
+  return { x: origin.x + dist*Math.cos(ang), y: origin.y + dist*Math.sin(ang) };
+}
+
+// Arestas de um segmento para o grafo (permite polilinha)
+function segEdgeList(seg) {
+  if (seg.type === 'line') {
+    return [{ a: seg.points[0], b: seg.points[1], w: segLength(seg) }];
+  }
+  if (seg.type === 'arc') {
+    return [{ a: seg.points[0], b: seg.points[2], w: segLength(seg) }];
+  }
+  if (seg.type === 'polyline') {
+    const out = [];
+    for (let i = 1; i < seg.points.length; i++) {
+      const a = seg.points[i-1], b = seg.points[i];
+      out.push({ a, b, w: Math.hypot(b.x-a.x, b.y-a.y) });
+    }
+    return out;
+  }
+  return [];
 }
 
 function distPtToSegPx(px,py,ax,ay,bx,by) {
@@ -233,46 +379,80 @@ function redo() {
 
 // ── SET TOOL ─────────────────────────────────────────────
 function setTool(tool) {
-  ui.tool      = tool;
-  ui.lineStart = null;
-  ui.arcPoints = [];
+  ui.tool         = tool;
+  ui.lineStart    = null;
+  ui.arcPoints    = [];
+  ui.polyPoints   = [];
+  ui.rectStart    = null;
+  ui.circleCenter = null;
+  ui.dragVertex   = null;
+  ui.mirrorPts    = [];
+  ui.offsetTargetId = null;
   hidePolarHud();
   hideFilletHud();
   hideMoveHud();
+  hideCoordHud();
+  hideOffsetHud();
+  hideRotateHud();
+  hideScaleHud();
+  hideArrayHud();
 
   canvas.className = '';
   if (tool === 'select')     canvas.classList.add('cursor-select');
   if (tool === 'move')       canvas.classList.add('cursor-select');
+  if (tool === 'vertex-edit') canvas.classList.add('cursor-vertex');
   if (tool === 'start-node' || tool === 'end-node') canvas.classList.add('cursor-node');
 
   document.querySelectorAll('.tool-btn[data-tool]').forEach(b =>
     b.classList.toggle('active', b.dataset.tool === tool));
 
   if (tool === 'fillet') showFilletHud();
+  if (tool === 'offset') showOffsetHud();
+  if (tool === 'rotate') showRotateHud();
+  if (tool === 'scale')  showScaleHud();
+  if (tool === 'array')  showArrayHud();
 
   const labels = {
     select:       'SELECIONAR',
     line:         'LINHA',
     arc:          'ARCO 3PTS',
+    circle:       'CÍRCULO',
+    rect:         'RETÂNGULO',
+    polyline:     'POLILINHA',
     fillet:       'ROUND/FILLET',
     'start-node': 'NÓ INÍCIO',
     'end-node':   'NÓ CHEGADA',
     move:         'MOVER PRECISÃO',
+    'vertex-edit':'EDITAR VÉRTICE',
+    trim:         'TRIM (APARAR)',
+    extend:       'EXTEND (ESTENDER)',
+    join:         'JOIN (UNIR)',
+    break:        'BREAK (QUEBRAR)',
+    offset:       'OFFSET',
+    mirror:       'MIRROR (ESPELHAR)',
+    rotate:       'ROTATE (GIRAR)',
+    scale:        'SCALE (ESCALAR)',
+    array:        'ARRAY (COPIAR)',
   };
   document.getElementById('status-tool').textContent = labels[tool] || tool.toUpperCase();
   setStatus('Pronto');
+  if (tool === 'mirror') setStatus('Selecione os objetos e clique numa linha existente como eixo');
+  if (tool === 'offset') setStatus('Clique no objeto e depois no lado do offset');
+  if (tool === 'trim')   setStatus('Clique no trecho que deseja remover');
+  if (tool === 'extend') setStatus('Clique perto da extremidade que deseja estender');
   render();
 }
 
 // ── LINHA ─────────────────────────────────────────────────
 function lineClick(wx, wy) {
-  const pt = ui.snapTarget || { x: wx, y: wy };
+  let pt = ui.snapTarget ? { ...ui.snapTarget } : { x: wx, y: wy };
   if (!ui.lineStart) {
     ui.lineStart = { ...pt };
     showPolarHud(pt);
     setStatus('Ponto inicial definido · clique para ponto final ou use o HUD polar');
     return;
   }
+  if (!ui.snapTarget) pt = pointFromConstraint(ui.lineStart, pt);
   commitLine(ui.lineStart, pt);
   ui.lineStart = { ...pt };
   updatePolarHudOrigin(ui.lineStart);
@@ -288,11 +468,101 @@ function commitLine(p0, p1) {
   render();
 }
 
+// ── CÍRCULO ───────────────────────────────────────────────
+function circleClick(wx, wy) {
+  const pt = ui.snapTarget ? { ...ui.snapTarget } : { x: wx, y: wy };
+  if (!ui.circleCenter) {
+    ui.circleCenter = { ...pt };
+    setStatus('Centro definido · clique para definir o raio');
+    return;
+  }
+  const r = Math.hypot(pt.x-ui.circleCenter.x, pt.y-ui.circleCenter.y);
+  if (r < 0.01) { setStatus('Raio muito pequeno'); return; }
+  saveUndo();
+  state.segments.push({ id: state.nextId++, type: 'circle',
+    points: [{ ...ui.circleCenter }], radius: r, selected: false });
+  ui.circleCenter = null;
+  state.dijkstraPath = [];
+  updatePanelInfo();
+  render();
+  setStatus(`Círculo R${r.toFixed(2)} cm`);
+}
+
+// ── RETÂNGULO ─────────────────────────────────────────────
+function rectClick(wx, wy) {
+  let pt = ui.snapTarget ? { ...ui.snapTarget } : { x: wx, y: wy };
+  if (!ui.rectStart) {
+    ui.rectStart = { ...pt };
+    setStatus('1º canto definido · clique no canto oposto');
+    return;
+  }
+  if (!ui.snapTarget) pt = pointFromConstraint(ui.rectStart, pt);
+  commitRect(ui.rectStart, pt);
+  ui.rectStart = null;
+}
+
+function commitRect(a, b) {
+  if (Math.abs(b.x-a.x) < 0.01 || Math.abs(b.y-a.y) < 0.01) return;
+  saveUndo();
+  const corners = [
+    { x: a.x, y: a.y }, { x: b.x, y: a.y },
+    { x: b.x, y: b.y }, { x: a.x, y: b.y },
+  ];
+  for (let i = 0; i < 4; i++) {
+    const p0 = corners[i], p1 = corners[(i+1) % 4];
+    state.segments.push({ id: state.nextId++, type: 'line',
+      points: [{ ...p0 }, { ...p1 }], selected: false });
+  }
+  state.dijkstraPath = [];
+  updatePanelInfo();
+  render();
+  setStatus(`Retângulo ${Math.abs(b.x-a.x).toFixed(1)}×${Math.abs(b.y-a.y).toFixed(1)} cm`);
+}
+
+// ── POLILINHA ─────────────────────────────────────────────
+function polyClick(wx, wy) {
+  let pt = ui.snapTarget ? { ...ui.snapTarget } : { x: wx, y: wy };
+  if (ui.polyPoints.length) {
+    const last = ui.polyPoints[ui.polyPoints.length-1];
+    if (!ui.snapTarget) pt = pointFromConstraint(last, pt);
+    if (Math.hypot(pt.x-last.x, pt.y-last.y) < 0.01) return;
+  }
+  ui.polyPoints.push({ ...pt });
+  setStatus(`Polilinha · ${ui.polyPoints.length} ponto(s) · Enter/dblclick finaliza`);
+  render();
+}
+
+function finalizePolyline() {
+  const pts = ui.polyPoints.filter((p, i, arr) =>
+    i === 0 || Math.hypot(p.x-arr[i-1].x, p.y-arr[i-1].y) > 0.01);
+  ui.polyPoints = [];
+  if (pts.length < 2) { render(); return; }
+  saveUndo();
+  if (pts.length === 2) {
+    state.segments.push({ id: state.nextId++, type: 'line',
+      points: [{ ...pts[0] }, { ...pts[1] }], selected: false });
+  } else {
+    state.segments.push({ id: state.nextId++, type: 'polyline',
+      points: pts.map(p => ({ ...p })), selected: false });
+  }
+  state.dijkstraPath = [];
+  updatePanelInfo();
+  render();
+  setStatus('Polilinha criada');
+}
+
 // ── ARCO 3PTS ────────────────────────────────────────────
 function arcClick(wx, wy) {
-  const pt = ui.snapTarget || { x: wx, y: wy };
+  const pt = ui.snapTarget ? { ...ui.snapTarget } : { x: wx, y: wy };
   ui.arcPoints.push({ ...pt });
   if (ui.arcPoints.length === 3) {
+    const probe = { type: 'arc', points: ui.arcPoints };
+    if (!arcGeometry(probe)) {
+      ui.arcPoints.pop();
+      setStatus('Pontos colineares · o arco precisa de 3 pontos não alinhados');
+      render();
+      return;
+    }
     saveUndo();
     state.segments.push({ id: state.nextId++, type: 'arc',
       points: ui.arcPoints.map(p => ({ ...p })), selected: false });
@@ -338,12 +608,100 @@ function filletClick(wx, wy) {
     }
   }
 
+  // vértice interno de polilinha (ex.: após join)
+  let internal = null;
+  for (const seg of state.segments) {
+    if (seg.type !== 'polyline') continue;
+    for (let i = 1; i < seg.points.length-1; i++) {
+      const p = seg.points[i];
+      const sp = w2s(p.x, p.y);
+      const d = Math.hypot(sp.x - ui.mouseScreen.x, sp.y - ui.mouseScreen.y);
+      if (d < EPS_PX && d < bestDist) { bestDist = d; internal = { seg, idx: i, pt: p }; }
+    }
+  }
+  if (internal) { applyRoundPolyline(internal.seg, internal.idx, radiusCm); return; }
+
   if (!bestVtx) { setStatus('Nenhum vértice encontrado · clique mais perto de uma quina'); return; }
 
   const { pt: vertex, list } = bestVtx;
   if (list.length < 2) { setStatus('Vértice precisa conectar 2 segmentos'); return; }
+  if (list[0].seg.id === list[1].seg.id) {
+    setStatus('Fillet precisa de dois objetos diferentes');
+    return;
+  }
 
   applyRound(list[0].seg, list[1].seg, vertex, radiusCm);
+}
+
+function applyRoundPolyline(seg, idx, radius) {
+  const pts = seg.points;
+  const v = pts[idx], A = pts[idx-1], B = pts[idx+1];
+  const lenA = distPts(A, v), lenB = distPts(B, v);
+  if (lenA < 1e-6 || lenB < 1e-6) { setStatus('Vértice degenerado'); return; }
+
+  const dA = { x:(A.x-v.x)/lenA, y:(A.y-v.y)/lenA };
+  const dB = { x:(B.x-v.x)/lenB, y:(B.y-v.y)/lenB };
+  const dot = Math.min(1, Math.max(-1, dA.x*dB.x + dA.y*dB.y));
+  const angle = Math.acos(dot);
+  if (angle < 0.01 || angle > Math.PI - 0.01) {
+    setStatus('Vértice sem ângulo para fillet');
+    return;
+  }
+
+  const dist = radius / Math.tan(angle/2);
+  if (dist >= lenA - 1e-3 || dist >= lenB - 1e-3) {
+    toast('Raio maior que o trecho disponível', 'warn');
+    return;
+  }
+
+  const tA = { x: v.x + dA.x*dist, y: v.y + dA.y*dist };
+  const tB = { x: v.x + dB.x*dist, y: v.y + dB.y*dist };
+
+  const bx = dA.x + dB.x, by = dA.y + dB.y;
+  const blen = Math.hypot(bx, by);
+  if (blen < 1e-9) { setStatus('Vértice sem ângulo para fillet'); return; }
+  const cx = v.x + (bx/blen) * (radius / Math.sin(angle/2));
+  const cy = v.y + (by/blen) * (radius / Math.sin(angle/2));
+
+  const aA = Math.atan2(tA.y-cy, tA.x-cx);
+  const aB = Math.atan2(tB.y-cy, tB.x-cx);
+  let sweep = normAngle(aB - aA);
+  if (sweep > Math.PI) sweep -= TWO_PI;
+  const aMid = aA + sweep/2;
+  const mid = { x: cx + radius*Math.cos(aMid), y: cy + radius*Math.sin(aMid) };
+
+  const total = segLength(seg);
+  let vertexT = 0;
+  for (let i = 1; i <= idx; i++) vertexT += distPts(pts[i-1], pts[i]);
+  vertexT = total > 1e-9 ? vertexT/total : 0;
+
+  saveUndo();
+  const left = pts.slice(0, idx);
+  const right = pts.slice(idx+1);
+  left.push({ ...tA });
+  right.unshift({ ...tB });
+
+  seg.type = left.length === 2 ? 'line' : 'polyline';
+  seg.points = left.map(p => ({ ...p }));
+  delete seg.radius;
+
+  const rightSeg = segmentFromPoints(right);
+  const arcSeg = {
+    id: state.nextId++, type: 'arc', selected: false,
+    points: [{ ...tA }, { ...mid }, { ...tB }],
+  };
+  state.segments.push(rightSeg, arcSeg);
+
+  ['start','end'].forEach(k => {
+    const n = state.nodes[k];
+    if (!n || n.segId !== seg.id) return;
+    const dest = n.t <= vertexT + 1e-9 ? seg : rightSeg;
+    const cp = closestPointOnSeg(dest, n.x, n.y);
+    n.segId = dest.id; n.x = cp.pt.x; n.y = cp.pt.y; n.t = cp.t;
+  });
+
+  refreshAfterEdit();
+  toast(`Round R${radius}cm aplicado`, 'success');
 }
 
 function applyRound(segA, segB, vertex, radius) {
@@ -359,7 +717,10 @@ function applyRound(segA, segB, vertex, radius) {
   const dB = dirAway(segB, vertex);
   const dot = Math.min(1, Math.max(-1, dA.x*dB.x + dA.y*dB.y));
   const angle = Math.acos(dot);
-  if (angle < 0.01) { setStatus('Segmentos paralelos, fillet não aplicável'); return; }
+  if (angle < 0.01 || angle > Math.PI - 0.01) {
+    setStatus('Segmentos alinhados, fillet não aplicável');
+    return;
+  }
 
   const dist = radius / Math.tan(angle / 2);
 
@@ -374,12 +735,17 @@ function applyRound(segA, segB, vertex, radius) {
   const cx = vertex.x + (bx/blen) * (radius / Math.sin(angle/2));
   const cy = vertex.y + (by/blen) * (radius / Math.sin(angle/2));
 
-  // Ponto de controle Bézier para aproximar o arco circular
-  // Fórmula: ponto de controle = interseção das tangentes (= vertex) ponderada
-  // Para arco circular real com Bézier quad: k = (4/3)*tan(angle/4)
-  const k  = (4/3) * Math.tan(angle/4);
-  const cpx = (tA.x + tB.x)/2 + k * (vertex.x - (tA.x+tB.x)/2);
-  const cpy = (tA.y + tB.y)/2 + k * (vertex.y - (tA.y+tB.y)/2);
+  // Ponto intermediário sobre o arco circular real (menor arco tA→tB)
+  const aA = Math.atan2(tA.y - cy, tA.x - cx);
+  const aB = Math.atan2(tB.y - cy, tB.x - cx);
+  const TWO = Math.PI * 2;
+  let sweepMinor = ((aB - aA) % TWO + TWO) % TWO;
+  if (sweepMinor > Math.PI) sweepMinor -= TWO;
+  const aMid = aA + sweepMinor / 2;
+  const mid  = {
+    x: cx + radius * Math.cos(aMid),
+    y: cy + radius * Math.sin(aMid),
+  };
 
   saveUndo();
 
@@ -398,19 +764,1048 @@ function applyRound(segA, segB, vertex, radius) {
   trimEndpoint(segA, vertex, tA);
   trimEndpoint(segB, vertex, tB);
 
-  // Arco de concordância
+  // Arco de concordância (circular real, passando pelo ponto médio)
   state.segments.push({
     id:     state.nextId++,
     type:   'arc',
-    points: [{ ...tA }, { x: cpx, y: cpy }, { ...tB }],
+    points: [{ ...tA }, { ...mid }, { ...tB }],
     selected: false,
   });
 
+  reattachNodes([segA.id, segB.id]);
   state.dijkstraPath = [];
   updatePanelInfo();
   render();
   toast(`Round R${radius}cm aplicado`, 'success');
 }
+
+// ══════════════════════════════════════════════════════════
+// FERRAMENTAS DE EDIÇÃO (Grupo 3)
+// ══════════════════════════════════════════════════════════
+
+function distPts(a, b) { return Math.hypot(a.x-b.x, a.y-b.y); }
+
+function lineLineIntersection(a, b, c, d) {
+  const r = { x: b.x-a.x, y: b.y-a.y };
+  const s = { x: d.x-c.x, y: d.y-c.y };
+  const den = r.x*s.y - r.y*s.x;
+  if (Math.abs(den) < 1e-9) return null;
+  const t = ((c.x-a.x)*s.y - (c.y-a.y)*s.x) / den;
+  const u = ((c.x-a.x)*r.y - (c.y-a.y)*r.x) / den;
+  return { pt: { x: a.x + t*r.x, y: a.y + t*r.y }, t, u };
+}
+
+function raySegmentIntersection(origin, dir, a, b) {
+  const s = { x: b.x-a.x, y: b.y-a.y };
+  const den = dir.x*s.y - dir.y*s.x;
+  if (Math.abs(den) < 1e-9) return null;
+  const t = ((a.x-origin.x)*s.y - (a.y-origin.y)*s.x) / den;
+  const u = ((a.x-origin.x)*dir.y - (a.y-origin.y)*dir.x) / den;
+  if (t > 1e-6 && u > -1e-6 && u < 1 + 1e-6) {
+    return { pt: { x: origin.x + t*dir.x, y: origin.y + t*dir.y }, t, u };
+  }
+  return null;
+}
+
+function findSegmentAt(wx, wy, maxPx) {
+  maxPx = maxPx || 10;
+  const sp = w2s(wx, wy);
+  let best = null, bestD = maxPx;
+  for (const seg of state.segments) {
+    const d = screenDistToSeg(seg, sp.x, sp.y);
+    if (d < bestD) { bestD = d; best = seg; }
+  }
+  return best;
+}
+
+function segmentFromPoints(points) {
+  return {
+    id: state.nextId++,
+    type: points.length === 2 ? 'line' : 'polyline',
+    points: points.map(p => ({ ...p })),
+    selected: false,
+  };
+}
+
+function refreshAfterEdit() {
+  state.dijkstraPath = [];
+  updatePanelInfo();
+  updateSelectionPanel();
+  updateDijkstraPanel();
+  render();
+}
+
+// ── GEOMETRIA AUXILIAR (trim / extend) ────────────────────
+const TWO_PI = Math.PI * 2;
+
+function normAngle(a) { return ((a % TWO_PI) + TWO_PI) % TWO_PI; }
+
+function segPieces(seg) {
+  if (seg.type === 'line') {
+    return [{ kind:'line', a: seg.points[0], b: seg.points[1] }];
+  }
+  if (seg.type === 'polyline') {
+    const out = [];
+    for (let i = 1; i < seg.points.length; i++)
+      out.push({ kind:'line', a: seg.points[i-1], b: seg.points[i] });
+    return out;
+  }
+  if (seg.type === 'arc') {
+    const g = arcGeometry(seg);
+    if (!g) return [];
+    return [{ kind:'circle', c:{ x:g.cx, y:g.cy }, r:g.r, a0:g.a0, sweep:g.sweep, full:false }];
+  }
+  if (seg.type === 'circle') {
+    return [{ kind:'circle', c: seg.points[0], r: seg.radius, a0:0, sweep:TWO_PI, full:true }];
+  }
+  return [];
+}
+
+function circlePieceParam(piece, ang) {
+  if (piece.full) return normAngle(ang) / TWO_PI;
+  const absS = Math.abs(piece.sweep);
+  const d = piece.sweep > 0 ? normAngle(ang - piece.a0) : normAngle(piece.a0 - ang);
+  if (d > absS + 1e-6) return null;
+  return d / absS;
+}
+
+function lineCircleHits(a, b, c, r) {
+  const dx = b.x-a.x, dy = b.y-a.y;
+  const fx = a.x-c.x, fy = a.y-c.y;
+  const A = dx*dx + dy*dy;
+  if (A < 1e-12) return [];
+  const B = 2*(fx*dx + fy*dy);
+  const C = fx*fx + fy*fy - r*r;
+  const disc = B*B - 4*A*C;
+  if (disc < -1e-9) return [];
+  const sq = Math.sqrt(Math.max(0, disc));
+  const ts = Math.abs(sq) < 1e-9 ? [-B/(2*A)] : [(-B-sq)/(2*A), (-B+sq)/(2*A)];
+  return ts.map(t => ({ t, pt:{ x:a.x+t*dx, y:a.y+t*dy } }));
+}
+
+function circleCircleHits(c1, r1, c2, r2) {
+  const dx = c2.x-c1.x, dy = c2.y-c1.y;
+  const d = Math.hypot(dx, dy);
+  if (d < 1e-9 || d > r1+r2+1e-9 || d < Math.abs(r1-r2)-1e-9) return [];
+  const a = (r1*r1 - r2*r2 + d*d) / (2*d);
+  const h = Math.sqrt(Math.max(0, r1*r1 - a*a));
+  const px = c1.x + a*dx/d, py = c1.y + a*dy/d;
+  const rx = -dy*h/d, ry = dx*h/d;
+  if (h < 1e-9) return [{ pt:{ x:px, y:py } }];
+  return [{ pt:{ x:px+rx, y:py+ry } }, { pt:{ x:px-rx, y:py-ry } }];
+}
+
+function intersectPieces(A, B) {
+  const out = [];
+  if (A.kind === 'line' && B.kind === 'line') {
+    const r = lineLineIntersection(A.a, A.b, B.a, B.b);
+    if (r && r.t >= -1e-6 && r.t <= 1+1e-6 && r.u >= -1e-6 && r.u <= 1+1e-6)
+      out.push({ pt:r.pt, tA:r.t, tB:r.u });
+    return out;
+  }
+  if (A.kind === 'line' && B.kind === 'circle') {
+    for (const it of lineCircleHits(A.a, A.b, B.c, B.r)) {
+      if (it.t < -1e-6 || it.t > 1+1e-6) continue;
+      const ang = Math.atan2(it.pt.y-B.c.y, it.pt.x-B.c.x);
+      const tB = circlePieceParam(B, ang);
+      if (tB !== null) out.push({ pt:it.pt, tA:it.t, tB });
+    }
+    return out;
+  }
+  if (A.kind === 'circle' && B.kind === 'line') {
+    for (const it of intersectPieces(B, A))
+      out.push({ pt:it.pt, tA:it.tB, tB:it.tA });
+    return out;
+  }
+  if (A.kind === 'circle' && B.kind === 'circle') {
+    for (const it of circleCircleHits(A.c, A.r, B.c, B.r)) {
+      const angA = Math.atan2(it.pt.y-A.c.y, it.pt.x-A.c.x);
+      const angB = Math.atan2(it.pt.y-B.c.y, it.pt.x-B.c.x);
+      const tA = circlePieceParam(A, angA);
+      const tB = circlePieceParam(B, angB);
+      if (tA !== null && tB !== null) out.push({ pt:it.pt, tA, tB });
+    }
+    return out;
+  }
+  return out;
+}
+
+function targetPieces(seg) {
+  if (seg.type === 'line') {
+    return [{ piece:{ kind:'line', a:seg.points[0], b:seg.points[1] }, t0:0, t1:1 }];
+  }
+  if (seg.type === 'polyline') {
+    const total = segLength(seg);
+    const out = [];
+    let acc = 0;
+    for (let i = 1; i < seg.points.length; i++) {
+      const a = seg.points[i-1], b = seg.points[i];
+      const len = Math.hypot(b.x-a.x, b.y-a.y);
+      const t0 = total > 1e-9 ? acc/total : 0;
+      acc += len;
+      const t1 = total > 1e-9 ? acc/total : 1;
+      out.push({ piece:{ kind:'line', a, b }, t0, t1 });
+    }
+    return out;
+  }
+  if (seg.type === 'arc') {
+    const g = arcGeometry(seg);
+    if (!g) return [];
+    return [{ piece:{ kind:'circle', c:{ x:g.cx, y:g.cy }, r:g.r, a0:g.a0, sweep:g.sweep, full:false }, t0:0, t1:1 }];
+  }
+  if (seg.type === 'circle') {
+    return [{ piece:{ kind:'circle', c:seg.points[0], r:seg.radius, a0:0, sweep:TWO_PI, full:true }, t0:0, t1:1 }];
+  }
+  return [];
+}
+
+function targetIntersections(seg) {
+  const raw = [];
+  const others = state.segments.filter(s => s.id !== seg.id);
+  for (const tp of targetPieces(seg)) {
+    for (const other of others) {
+      for (const piece of segPieces(other)) {
+        for (const it of intersectPieces(tp.piece, piece)) {
+          const t = tp.t0 + it.tA * (tp.t1 - tp.t0);
+          if (t > 1e-4 && t < 1 - 1e-4) raw.push({ t, pt:it.pt });
+        }
+      }
+    }
+  }
+  raw.sort((a,b) => a.t - b.t);
+  const out = [];
+  for (const c of raw) {
+    if (!out.length || Math.abs(c.t - out[out.length-1].t) > 1e-4) out.push(c);
+  }
+  return out;
+}
+
+function pointOnPolyline(seg, t) {
+  const total = segLength(seg);
+  if (total <= 1e-9) return { ...seg.points[0] };
+  let target = Math.max(0, Math.min(1, t)) * total;
+  let acc = 0;
+  for (let i = 1; i < seg.points.length; i++) {
+    const a = seg.points[i-1], b = seg.points[i];
+    const len = Math.hypot(b.x-a.x, b.y-a.y);
+    if (acc + len >= target || i === seg.points.length-1) {
+      const u = len > 1e-12 ? (target-acc)/len : 0;
+      return { x: a.x + (b.x-a.x)*u, y: a.y + (b.y-a.y)*u };
+    }
+    acc += len;
+  }
+  return { ...seg.points[seg.points.length-1] };
+}
+
+function subSegmentPoints(seg, t0, t1) {
+  if (seg.type === 'line') {
+    const p0 = seg.points[0], p1 = seg.points[1];
+    return [
+      { x: p0.x + (p1.x-p0.x)*t0, y: p0.y + (p1.y-p0.y)*t0 },
+      { x: p0.x + (p1.x-p0.x)*t1, y: p0.y + (p1.y-p0.y)*t1 },
+    ];
+  }
+  if (seg.type === 'arc') {
+    return [
+      arcPointAt(seg, t0),
+      arcPointAt(seg, (t0+t1)/2),
+      arcPointAt(seg, t1),
+    ];
+  }
+  if (seg.type === 'polyline') {
+    const total = segLength(seg);
+    const pts = [pointOnPolyline(seg, t0)];
+    let acc = 0;
+    const aT = Math.min(t0,t1)*total, bT = Math.max(t0,t1)*total;
+    for (let i = 1; i < seg.points.length-1; i++) {
+      const a = seg.points[i-1], b = seg.points[i];
+      acc += Math.hypot(b.x-a.x, b.y-a.y);
+      if (acc > aT+1e-9 && acc < bT-1e-9) pts.push({ ...seg.points[i] });
+    }
+    pts.push(pointOnPolyline(seg, t1));
+    return pts;
+  }
+  return [];
+}
+
+function assignPiece(seg, pts) {
+  if (pts.length <= 1) return false;
+  if (pts.length === 2) {
+    seg.type = 'line';
+    seg.points = pts.map(p => ({ ...p }));
+    delete seg.radius;
+    return true;
+  }
+  if (seg.type === 'arc' && pts.length === 3) {
+    seg.points = pts.map(p => ({ ...p }));
+    delete seg.radius;
+    return true;
+  }
+  seg.type = 'polyline';
+  seg.points = pts.map(p => ({ ...p }));
+  delete seg.radius;
+  return true;
+}
+
+function makePieceSegment(pts, arcLike) {
+  return {
+    id: state.nextId++,
+    type: arcLike ? 'arc' : (pts.length === 2 ? 'line' : 'polyline'),
+    points: pts.map(p => ({ ...p })),
+    selected: false,
+  };
+}
+
+function reattachNodes(segIds) {
+  const ids = new Set(segIds);
+  ['start','end'].forEach(k => {
+    const n = state.nodes[k];
+    if (!n || !ids.has(n.segId)) return;
+    const seg = state.segments.find(s => s.id === n.segId);
+    if (!seg) { state.nodes[k] = null; return; }
+    const cp = closestPointOnSeg(seg, n.x, n.y);
+    n.x = cp.pt.x; n.y = cp.pt.y; n.t = cp.t;
+  });
+}
+
+function reattachSplit(segId, cutT, segA, segB) {
+  ['start','end'].forEach(k => {
+    const n = state.nodes[k];
+    if (!n || n.segId !== segId) return;
+    const dest = n.t <= cutT + 1e-9 ? segA : segB;
+    const cp = closestPointOnSeg(dest, n.x, n.y);
+    n.segId = dest.id; n.x = cp.pt.x; n.y = cp.pt.y; n.t = cp.t;
+  });
+}
+
+// ── TRIM (aparar) ─────────────────────────────────────────
+function trimCircle(target, wx, wy) {
+  const c = target.points[0], r = target.radius;
+  const probe = { kind:'circle', c, r, a0:0, sweep:TWO_PI, full:true };
+  const raw = [];
+  for (const other of state.segments) {
+    if (other.id === target.id) continue;
+    for (const p of segPieces(other)) {
+      for (const it of intersectPieces(probe, p)) raw.push({ t: it.tA, pt: it.pt });
+    }
+  }
+  raw.sort((a,b) => a.t - b.t);
+  const cuts = [];
+  for (const it of raw) {
+    if (!cuts.length || Math.abs(it.t - cuts[cuts.length-1].t) > 1e-4) cuts.push(it);
+  }
+  if (cuts.length < 2) {
+    setStatus('Círculo precisa de 2 interseções para aparar');
+    return;
+  }
+  const tc = closestPointOnSeg(target, wx, wy).t;
+  const last = cuts.length - 1;
+  let idx = -1;
+  for (let i = 0; i < cuts.length; i++) {
+    const lo = cuts[i].t;
+    const hi = i === last ? cuts[0].t + 1 : cuts[i+1].t;
+    if (tc >= lo - 1e-6 && tc <= hi + 1e-6) { idx = i; break; }
+  }
+  if (idx < 0) idx = last;
+  const lo = cuts[idx].t;
+  const hi = idx === last ? cuts[0].t + 1 : cuts[idx+1].t;
+  const startT = hi % 1;
+  const sweepKeep = lo + 1 - hi;
+  if (sweepKeep < 1e-4) { setStatus('Trecho resultante muito pequeno'); return; }
+
+  saveUndo();
+  const at = t => {
+    const a = t * TWO_PI;
+    return { x: c.x + r*Math.cos(a), y: c.y + r*Math.sin(a) };
+  };
+  target.type = 'arc';
+  target.points = [ at(startT), at(startT + sweepKeep/2), at(startT + sweepKeep) ];
+  delete target.radius;
+  reattachNodes([target.id]);
+  refreshAfterEdit();
+  toast('Círculo aparado', 'success');
+}
+
+function trimClick(wx, wy) {
+  const target = findSegmentAt(wx, wy, 14);
+  if (!target) { setStatus('Clique sobre um objeto para aparar'); return; }
+  if (target.type === 'circle') { trimCircle(target, wx, wy); return; }
+
+  const cuts = targetIntersections(target);
+  if (!cuts.length) { setStatus('Nenhuma interseção encontrada para aparar'); return; }
+  const tc = closestPointOnSeg(target, wx, wy).t;
+  const bounds = [0, ...cuts.map(c => c.t), 1].sort((a,b) => a-b);
+  let j = -1;
+  for (let i = 0; i < bounds.length-1; i++) {
+    if (tc >= bounds[i] - 1e-6 && tc <= bounds[i+1] + 1e-6) { j = i; break; }
+  }
+  if (j < 0) { setStatus('Não foi possível identificar o trecho'); return; }
+  const lo = bounds[j], hi = bounds[j+1];
+  if (hi - lo < 1e-4) { setStatus('Trecho muito pequeno'); return; }
+
+  const arcLike = target.type === 'arc';
+  saveUndo();
+  if (lo <= 1e-4) {
+    assignPiece(target, subSegmentPoints(target, hi, 1));
+  } else if (hi >= 1 - 1e-4) {
+    assignPiece(target, subSegmentPoints(target, 0, lo));
+  } else {
+    const keep = subSegmentPoints(target, 0, lo);
+    const rest = subSegmentPoints(target, hi, 1);
+    assignPiece(target, keep);
+    state.segments.push(makePieceSegment(rest, arcLike));
+  }
+  reattachNodes([target.id]);
+  refreshAfterEdit();
+  toast('Objeto aparado', 'success');
+}
+
+// ── EXTEND (estender) ─────────────────────────────────────
+function rayCircleHits(origin, dir, c, r) {
+  const fx = origin.x-c.x, fy = origin.y-c.y;
+  const B = 2*(fx*dir.x + fy*dir.y);
+  const C = fx*fx + fy*fy - r*r;
+  const disc = B*B - 4*C;
+  if (disc < -1e-9) return [];
+  const sq = Math.sqrt(Math.max(0, disc));
+  const ts = Math.abs(sq) < 1e-9 ? [-B/2] : [(-B-sq)/2, (-B+sq)/2];
+  return ts.map(t => ({ t, pt:{ x:origin.x+dir.x*t, y:origin.y+dir.y*t } }));
+}
+
+function rayCandidates(origin, dir, excludeId) {
+  const out = [];
+  for (const other of state.segments) {
+    if (other.id === excludeId) continue;
+    for (const piece of segPieces(other)) {
+      if (piece.kind === 'line') {
+        const r = raySegmentIntersection(origin, dir, piece.a, piece.b);
+        if (r) out.push({ t: r.t, pt: r.pt });
+      } else {
+        for (const it of rayCircleHits(origin, dir, piece.c, piece.r)) {
+          if (it.t <= 1e-6) continue;
+          const ang = Math.atan2(it.pt.y-piece.c.y, it.pt.x-piece.c.x);
+          if (circlePieceParam(piece, ang) === null) continue;
+          out.push({ t: it.t, pt: it.pt });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function extendStraightPoint(target, isFirst) {
+  const pts = target.points;
+  const base = isFirst ? pts[1] : pts[pts.length-2];
+  const end  = isFirst ? pts[0] : pts[pts.length-1];
+  const len = Math.hypot(end.x-base.x, end.y-base.y);
+  if (len < 1e-9) { setStatus('Objeto degenerado'); return null; }
+  const dir = { x:(end.x-base.x)/len, y:(end.y-base.y)/len };
+  let best = null;
+  for (const c of rayCandidates(base, dir, target.id)) {
+    if (c.t <= len + 1e-3) continue;
+    if (!best || c.t < best.t) best = c;
+  }
+  if (!best) { setStatus('Nenhuma interseção à frente para estender'); return null; }
+  return { ...best.pt };
+}
+
+function extendArcPoint(target, endIdx) {
+  const g = arcGeometry(target);
+  if (!g) { setStatus('Arco inválido'); return null; }
+  const sign = g.sweep > 0 ? 1 : -1;
+  const startA = g.a0;
+  const endA = g.a0 + g.sweep;
+  const fromA = endIdx === 2 ? endA : startA;
+  const gap = TWO_PI - Math.abs(g.sweep);
+  if (gap < 1e-4) { setStatus('Arco já está completo'); return null; }
+
+  const probe = { kind:'circle', c:{ x:g.cx, y:g.cy }, r:g.r, a0:0, sweep:TWO_PI, full:true };
+  let best = null;
+  for (const other of state.segments) {
+    if (other.id === target.id) continue;
+    for (const piece of segPieces(other)) {
+      for (const it of intersectPieces(probe, piece)) {
+        const ang = Math.atan2(it.pt.y-g.cy, it.pt.x-g.cx);
+        const d = endIdx === 2
+          ? (sign > 0 ? normAngle(ang - endA) : normAngle(endA - ang))
+          : (sign > 0 ? normAngle(startA - ang) : normAngle(ang - startA));
+        if (d < 1e-4 || d > gap - 1e-6) continue;
+        if (!best || d < best.d) best = { d, ang };
+      }
+    }
+  }
+  if (!best) { setStatus('Nenhuma interseção à frente para estender'); return null; }
+  const newA = endIdx === 2 ? fromA + sign*best.d : fromA - sign*best.d;
+  return { x:g.cx + g.r*Math.cos(newA), y:g.cy + g.r*Math.sin(newA) };
+}
+
+function extendClick(wx, wy) {
+  const target = findSegmentAt(wx, wy, 14);
+  if (!target) { setStatus('Clique sobre um objeto para estender'); return; }
+  if (target.type === 'circle') { setStatus('Estender não se aplica a círculos'); return; }
+
+  let endIdx = -1, pt = null;
+  if (target.type === 'line') {
+    endIdx = Math.hypot(wx-target.points[0].x, wy-target.points[0].y)
+           < Math.hypot(wx-target.points[1].x, wy-target.points[1].y) ? 0 : 1;
+    pt = extendStraightPoint(target, endIdx === 0);
+  } else if (target.type === 'polyline') {
+    const n = target.points.length - 1;
+    endIdx = Math.hypot(wx-target.points[0].x, wy-target.points[0].y)
+           < Math.hypot(wx-target.points[n].x, wy-target.points[n].y) ? 0 : n;
+    pt = extendStraightPoint(target, endIdx === 0);
+  } else if (target.type === 'arc') {
+    endIdx = Math.hypot(wx-target.points[0].x, wy-target.points[0].y)
+           < Math.hypot(wx-target.points[2].x, wy-target.points[2].y) ? 0 : 2;
+    pt = extendArcPoint(target, endIdx);
+  }
+
+  if (!pt) return;
+  saveUndo();
+  target.points[endIdx] = { ...pt };
+  reattachNodes([target.id]);
+  refreshAfterEdit();
+  toast('Objeto estendido', 'success');
+}
+
+// ── JOIN (unir) ───────────────────────────────────────────
+function joinSelected() {
+  const segs = state.segments.filter(s =>
+    ui.selection.has(s.id) && (s.type === 'line' || s.type === 'polyline'));
+  if (segs.length < 2) { toast('Selecione ao menos 2 linhas/polilinhas', 'warn'); return; }
+
+  const chains = segs.map(s =>
+    s.type === 'line' ? [{ ...s.points[0] }, { ...s.points[1] }] : s.points.map(p => ({ ...p })));
+  let merged = chains.shift();
+  const remaining = chains.slice();
+  const TOL = 0.6;
+  let progress = true;
+  while (remaining.length && progress) {
+    progress = false;
+    for (let i = 0; i < remaining.length; i++) {
+      const ch = remaining[i];
+      const startA = merged[0], endA = merged[merged.length-1];
+      const startB = ch[0], endB = ch[ch.length-1];
+      if (distPts(endA, startB) < TOL) {
+        merged = merged.concat(ch.slice(1));
+      } else if (distPts(endA, endB) < TOL) {
+        merged = merged.concat(ch.slice(0, -1).reverse());
+      } else if (distPts(startA, endB) < TOL) {
+        merged = ch.concat(merged.slice(1));
+      } else if (distPts(startA, startB) < TOL) {
+        merged = ch.slice().reverse().concat(merged.slice(1));
+      } else {
+        continue;
+      }
+      remaining.splice(i, 1);
+      progress = true;
+      break;
+    }
+  }
+  if (remaining.length) { toast('Segmentos não conectados entre si', 'warn'); return; }
+
+  saveUndo();
+  const selectedIds = new Set(ui.selection);
+  state.segments = state.segments.filter(s => !ui.selection.has(s.id));
+  const joined = segmentFromPoints(merged);
+  state.segments.push(joined);
+  ['start','end'].forEach(k => {
+    const n = state.nodes[k];
+    if (!n || !selectedIds.has(n.segId)) return;
+    const cp = closestPointOnSeg(joined, n.x, n.y);
+    n.segId = joined.id; n.x = cp.pt.x; n.y = cp.pt.y; n.t = cp.t;
+  });
+  ui.selection.clear();
+  ui.selection.add(joined.id);
+  refreshAfterEdit();
+  toast('Segmentos unidos', 'success');
+}
+
+// ── BREAK (quebrar no ponto) ──────────────────────────────
+function breakClick(wx, wy) {
+  const target = findSegmentAt(wx, wy, 12);
+  if (!target) { setStatus('Clique sobre um segmento para quebrar'); return; }
+  const cp = closestPointOnSeg(target, wx, wy);
+
+  if (target.type === 'line') {
+    if (cp.t < 0.02 || cp.t > 0.98) { setStatus('Muito perto da extremidade'); return; }
+    saveUndo();
+    const p0 = target.points[0], p1 = target.points[1];
+    target.points = [{ ...p0 }, { ...cp.pt }];
+    const second = { id: state.nextId++, type: 'line',
+      points: [{ ...cp.pt }, { ...p1 }], selected: false };
+    state.segments.push(second);
+    reattachSplit(target.id, cp.t, target, second);
+    refreshAfterEdit();
+    toast('Linha quebrada', 'success');
+    return;
+  }
+
+  if (target.type === 'polyline') {
+    let bi = -1, bpt = null, bd = Infinity;
+    for (let i = 1; i < target.points.length; i++) {
+      const a = target.points[i-1], b = target.points[i];
+      const dx = b.x-a.x, dy = b.y-a.y, len2 = dx*dx+dy*dy;
+      let u = len2 > 1e-12 ? ((wx-a.x)*dx + (wy-a.y)*dy)/len2 : 0;
+      u = Math.max(0, Math.min(1, u));
+      const pt = { x: a.x+u*dx, y: a.y+u*dy };
+      const d = Math.hypot(wx-pt.x, wy-pt.y);
+      if (d < bd) { bd = d; bi = i; bpt = pt; }
+    }
+    if (bi < 0) { setStatus('Não foi possível quebrar'); return; }
+    const total = segLength(target);
+    let acc = 0;
+    for (let i = 1; i <= bi; i++) {
+      const a = target.points[i-1], b = target.points[i];
+      const len = Math.hypot(b.x-a.x, b.y-a.y);
+      if (i < bi) {
+        acc += len;
+      } else {
+        const dx = b.x-a.x, dy = b.y-a.y, len2 = dx*dx+dy*dy;
+        let u = len2 > 1e-12 ? ((wx-a.x)*dx + (wy-a.y)*dy)/len2 : 0;
+        u = Math.max(0, Math.min(1, u));
+        acc += u*len;
+      }
+    }
+    const cutT = total > 1e-9 ? acc/total : 0;
+    saveUndo();
+    const first  = target.points.slice(0, bi).concat([{ ...bpt }]);
+    const secondPts = [{ ...bpt }].concat(target.points.slice(bi));
+    target.type = first.length === 2 ? 'line' : 'polyline';
+    target.points = first;
+    const second = segmentFromPoints(secondPts);
+    state.segments.push(second);
+    reattachSplit(target.id, cutT, target, second);
+    refreshAfterEdit();
+    toast('Polilinha quebrada', 'success');
+    return;
+  }
+
+  if (target.type === 'arc') {
+    if (cp.t < 0.02 || cp.t > 0.98) { setStatus('Muito perto da extremidade'); return; }
+    const mid1 = arcPointAt(target, cp.t/2);
+    const mid2 = arcPointAt(target, (1+cp.t)/2);
+    saveUndo();
+    const p0 = target.points[0], p1 = target.points[2];
+    target.points = [{ ...p0 }, { ...mid1 }, { ...cp.pt }];
+    const second = { id: state.nextId++, type: 'arc',
+      points: [{ ...cp.pt }, { ...mid2 }, { ...p1 }], selected: false };
+    state.segments.push(second);
+    reattachSplit(target.id, cp.t, target, second);
+    refreshAfterEdit();
+    toast('Arco quebrado', 'success');
+    return;
+  }
+
+  setStatus('Break disponível para linha, polilinha e arco');
+}
+
+// ── OFFSET ────────────────────────────────────────────────
+function sideOfEdge(a, b, px, py) {
+  const cross = (b.x-a.x)*(py-a.y) - (b.y-a.y)*(px-a.x);
+  if (Math.abs(cross) < 1e-12) return 1;
+  return cross > 0 ? 1 : -1;
+}
+
+function buildOffset(target, wx, wy, dist) {
+  if (target.type === 'line') {
+    const a = target.points[0], b = target.points[1];
+    const dx = b.x-a.x, dy = b.y-a.y, len = Math.hypot(dx, dy);
+    if (len < 1e-9) return null;
+    const nx = -dy/len, ny = dx/len;
+    const side = sideOfEdge(a, b, wx, wy);
+    const ox = nx*dist*side, oy = ny*dist*side;
+    return { id: state.nextId++, type: 'line', selected: false,
+      points: [{ x: a.x+ox, y: a.y+oy }, { x: b.x+ox, y: b.y+oy }] };
+  }
+
+  if (target.type === 'circle') {
+    const c = target.points[0];
+    const dClick = Math.hypot(wx-c.x, wy-c.y);
+    const side = dClick < target.radius ? -1 : 1;
+    const r = target.radius + dist*side;
+    if (r <= 0.01) { toast('Raio resultante inválido', 'warn'); return null; }
+    return { id: state.nextId++, type: 'circle', selected: false,
+      points: [{ ...c }], radius: r };
+  }
+
+  if (target.type === 'arc') {
+    const g = arcGeometry(target);
+    if (!g) { setStatus('Arco inválido'); return null; }
+    const dClick = Math.hypot(wx-g.cx, wy-g.cy);
+    const side = dClick < g.r ? -1 : 1;
+    const r2 = g.r + dist*side;
+    if (r2 <= 0.01) { toast('Raio resultante inválido', 'warn'); return null; }
+    const k = r2 / g.r;
+    return { id: state.nextId++, type: 'arc', selected: false,
+      points: target.points.map(p => ({
+        x: g.cx + (p.x-g.cx)*k,
+        y: g.cy + (p.y-g.cy)*k,
+      })) };
+  }
+
+  if (target.type === 'polyline') {
+    const pts = target.points;
+    const e = polylineEdgeAt(target, wx, wy);
+    const side = e ? sideOfEdge(e.a, e.b, wx, wy) : 1;
+    const normals = [];
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i-1], b = pts[i];
+      const dx = b.x-a.x, dy = b.y-a.y, l = Math.hypot(dx, dy);
+      if (l < 1e-9) { normals.push({ x: 0, y: 0 }); continue; }
+      normals.push({ x: side*(-dy/l), y: side*(dx/l) });
+    }
+    const out = [];
+    for (let i = 0; i < pts.length; i++) {
+      if (i === 0) {
+        const n = normals[0];
+        out.push({ x: pts[i].x + n.x*dist, y: pts[i].y + n.y*dist });
+      } else if (i === pts.length-1) {
+        const n = normals[normals.length-1];
+        out.push({ x: pts[i].x + n.x*dist, y: pts[i].y + n.y*dist });
+      } else {
+        const n1 = normals[i-1], n2 = normals[i];
+        let mx = n1.x+n2.x, my = n1.y+n2.y;
+        const ml = Math.hypot(mx, my);
+        if (ml < 1e-9) {
+          out.push({ x: pts[i].x + n1.x*dist, y: pts[i].y + n1.y*dist });
+          continue;
+        }
+        mx /= ml; my /= ml;
+        const denom = mx*n1.x + my*n1.y;
+        if (Math.abs(denom) < 0.1) {
+          out.push({ x: pts[i].x + n1.x*dist, y: pts[i].y + n1.y*dist });
+        } else {
+          const s = dist / denom;
+          out.push({ x: pts[i].x + mx*s, y: pts[i].y + my*s });
+        }
+      }
+    }
+    return { id: state.nextId++, type: 'polyline', selected: false, points: out };
+  }
+
+  return null;
+}
+
+function offsetClick(wx, wy) {
+  let target = ui.offsetTargetId !== null
+    ? state.segments.find(s => s.id === ui.offsetTargetId)
+    : null;
+
+  if (!target) {
+    target = findSegmentAt(wx, wy, 14);
+    if (!target) { setStatus('Clique sobre um objeto para escolher o offset'); return; }
+    ui.offsetTargetId = target.id;
+    ui.selection.clear();
+    ui.selection.add(target.id);
+    updateSelectionPanel();
+    setStatus('Objeto escolhido · clique no lado desejado');
+    render();
+    return;
+  }
+
+  const dist = parseFloat(document.getElementById('offset-dist').value) || 1;
+  if (dist <= 0) { toast('Distância inválida', 'warn'); return; }
+
+  const created = buildOffset(target, wx, wy, dist);
+  if (!created) { setStatus('Offset não suportado neste tipo'); return; }
+
+  saveUndo();
+  state.segments.push(created);
+  ui.selection.clear();
+  ui.selection.add(created.id);
+  ui.offsetTargetId = null;
+  refreshAfterEdit();
+  toast(`Offset de ${dist}cm criado`, 'success');
+}
+
+// ── MIRROR (espelhar) ─────────────────────────────────────
+function reflectPoint(p, a, b) {
+  const dx = b.x-a.x, dy = b.y-a.y, len2 = dx*dx+dy*dy;
+  if (len2 < 1e-12) return { ...p };
+  const t = ((p.x-a.x)*dx + (p.y-a.y)*dy) / len2;
+  const proj = { x: a.x + t*dx, y: a.y + t*dy };
+  return { x: 2*proj.x - p.x, y: 2*proj.y - p.y };
+}
+
+function polylineEdgeAt(seg, wx, wy) {
+  let best = null, bestD = Infinity;
+  for (let i = 1; i < seg.points.length; i++) {
+    const a = seg.points[i-1], b = seg.points[i];
+    const dx = b.x-a.x, dy = b.y-a.y, len2 = dx*dx+dy*dy;
+    let u = len2 > 1e-12 ? ((wx-a.x)*dx + (wy-a.y)*dy)/len2 : 0;
+    u = Math.max(0, Math.min(1, u));
+    const pt = { x: a.x+u*dx, y: a.y+u*dy };
+    const d = Math.hypot(wx-pt.x, wy-pt.y);
+    if (d < bestD) { bestD = d; best = { a, b, pt, d }; }
+  }
+  return best;
+}
+
+function mirrorAxisFromSegment(seg, wx, wy) {
+  if (!seg) return null;
+  if (seg.type === 'line') return [seg.points[0], seg.points[1]];
+  if (seg.type === 'polyline') {
+    const e = polylineEdgeAt(seg, wx, wy);
+    return e ? [e.a, e.b] : null;
+  }
+  return null;
+}
+
+function applyMirror(a, b) {
+  if (!ui.selection.size) { toast('Selecione objetos para espelhar', 'warn'); return false; }
+  if (distPts(a, b) < 1e-6) { toast('Eixo inválido', 'warn'); return false; }
+  saveUndo();
+  const copies = [];
+  for (const seg of state.segments) {
+    if (!ui.selection.has(seg.id)) continue;
+    const copy = JSON.parse(JSON.stringify(seg));
+    copy.id = state.nextId++;
+    copy.selected = false;
+    copy.points = copy.points.map(p => reflectPoint(p, a, b));
+    copies.push(copy);
+  }
+  state.segments.push(...copies);
+  refreshAfterEdit();
+  toast(`${copies.length} objeto(s) espelhado(s)`, 'success');
+  return true;
+}
+
+function mirrorClick(wx, wy) {
+  if (!ui.mirrorPts.length) {
+    const seg = findSegmentAt(wx, wy, 14);
+    const axis = mirrorAxisFromSegment(seg, wx, wy);
+    if (axis) { applyMirror(axis[0], axis[1]); return; }
+  }
+  ui.mirrorPts.push({ x: wx, y: wy });
+  if (ui.mirrorPts.length < 2) {
+    setStatus('Clique noutra linha para usar como eixo ou no 2º ponto do eixo manual');
+    render();
+    return;
+  }
+  const a = ui.mirrorPts[0], b = ui.mirrorPts[1];
+  ui.mirrorPts = [];
+  applyMirror(a, b);
+}
+
+// ── TRANSFORMAÇÕES (rotate / scale / array) ───────────────
+function selectedSegs() {
+  return state.segments.filter(s => ui.selection.has(s.id));
+}
+
+function selectionCentroid() {
+  const segs = selectedSegs();
+  let sx = 0, sy = 0, n = 0;
+  for (const s of segs) {
+    for (const p of s.points) { sx += p.x; sy += p.y; n++; }
+  }
+  return n ? { x: sx/n, y: sy/n } : null;
+}
+
+function transformAttachedNodes(fn) {
+  ['start','end'].forEach(k => {
+    const n = state.nodes[k];
+    if (!n || !ui.selection.has(n.segId)) return;
+    const p = fn({ x: n.x, y: n.y });
+    n.x = p.x; n.y = p.y;
+  });
+}
+
+function applyRotate() {
+  const angle = parseFloat(document.getElementById('rotate-angle').value);
+  if (isNaN(angle)) { toast('Ângulo inválido', 'warn'); return; }
+  if (!ui.selection.size) { toast('Selecione objetos para girar', 'warn'); return; }
+  const c = selectionCentroid();
+  if (!c) return;
+  const rad = angle * Math.PI / 180;
+  const cos = Math.cos(rad), sin = Math.sin(rad);
+  saveUndo();
+  for (const seg of selectedSegs()) {
+    seg.points.forEach(p => {
+      const dx = p.x-c.x, dy = p.y-c.y;
+      p.x = c.x + dx*cos - dy*sin;
+      p.y = c.y + dx*sin + dy*cos;
+    });
+  }
+  transformAttachedNodes(p => {
+    const dx = p.x-c.x, dy = p.y-c.y;
+    return { x: c.x + dx*cos - dy*sin, y: c.y + dx*sin + dy*cos };
+  });
+  refreshAfterEdit();
+  toast(`Giro de ${angle}° aplicado`, 'success');
+}
+
+function applyScale() {
+  const factor = parseFloat(document.getElementById('scale-factor').value);
+  if (isNaN(factor) || factor <= 0) { toast('Fator inválido', 'warn'); return; }
+  if (!ui.selection.size) { toast('Selecione objetos para escalar', 'warn'); return; }
+  const c = selectionCentroid();
+  if (!c) return;
+  saveUndo();
+  for (const seg of selectedSegs()) {
+    seg.points.forEach(p => {
+      p.x = c.x + (p.x-c.x)*factor;
+      p.y = c.y + (p.y-c.y)*factor;
+    });
+    if (seg.type === 'circle') seg.radius *= factor;
+  }
+  transformAttachedNodes(p => ({
+    x: c.x + (p.x-c.x)*factor,
+    y: c.y + (p.y-c.y)*factor,
+  }));
+  refreshAfterEdit();
+  toast(`Escala ${factor}× aplicada`, 'success');
+}
+
+function applyArray() {
+  const count = parseInt(document.getElementById('array-count').value, 10);
+  const dx = parseFloat(document.getElementById('array-dx').value) || 0;
+  const dy = parseFloat(document.getElementById('array-dy').value) || 0;
+  if (isNaN(count) || count < 1) { toast('Quantidade inválida', 'warn'); return; }
+  if (!ui.selection.size) { toast('Selecione objetos para copiar', 'warn'); return; }
+  saveUndo();
+  const originals = selectedSegs().map(s => JSON.parse(JSON.stringify(s)));
+  const created = [];
+  for (let i = 1; i <= count; i++) {
+    for (const src of originals) {
+      const copy = JSON.parse(JSON.stringify(src));
+      copy.id = state.nextId++;
+      copy.selected = false;
+      copy.points.forEach(p => { p.x += dx*i; p.y += dy*i; });
+      state.segments.push(copy);
+      created.push(copy);
+    }
+  }
+  ui.selection.clear();
+  created.forEach(c => ui.selection.add(c.id));
+  refreshAfterEdit();
+  toast(`${created.length} cópia(s) criada(s)`, 'success');
+}
+
+// ── EDIÇÃO DE VÉRTICE ─────────────────────────────────────
+function findNearestVertex(sx, sy) {
+  let best = null, bestD = 9;
+  for (const seg of state.segments) {
+    for (const v of segVertices(seg)) {
+      const sp = w2s(v.pt.x, v.pt.y);
+      const d = Math.hypot(sp.x-sx, sp.y-sy);
+      if (d < bestD) { bestD = d; best = { seg, idx: v.idx, pt: v.pt }; }
+    }
+  }
+  return best;
+}
+
+function vertexEditDown(sx, sy, e) {
+  const hit = findNearestVertex(sx, sy);
+  if (!hit) { setStatus('Clique sobre um vértice (dblclick insere, Alt+clique remove)'); return; }
+  if (e.altKey) { removeVertexAt(hit); return; }
+  saveUndo();
+  ui.dragVertex = { segId: hit.seg.id, idx: hit.idx };
+  setStatus('Arraste o vértice · Alt+clique remove · dblclick insere');
+}
+
+function removeVertexAt(hit) {
+  const seg = hit.seg;
+  if (seg.type === 'polyline') {
+    if (seg.points.length <= 2) { toast('Polilinha precisa de 2 pontos', 'warn'); return; }
+    saveUndo();
+    seg.points.splice(hit.idx, 1);
+    reattachNodes([seg.id]);
+    refreshAfterEdit();
+    setStatus('Vértice removido');
+    return;
+  }
+  if (seg.type === 'line') { toast('Linha tem apenas 2 vértices', 'warn'); return; }
+  toast('Remoção não suportada neste tipo', 'warn');
+}
+
+function insertVertexAt(sx, sy) {
+  let best = null, bestD = 10;
+  for (const seg of state.segments) {
+    const d = screenDistToSeg(seg, sx, sy);
+    if (d < bestD) { bestD = d; best = seg; }
+  }
+  if (!best) { setStatus('Clique sobre um segmento'); return; }
+  const wp = s2w(sx, sy);
+
+  if (best.type === 'line') {
+    const cp = closestPointOnSeg(best, wp.x, wp.y);
+    if (cp.t < 0.02 || cp.t > 0.98) { setStatus('Muito perto da extremidade'); return; }
+    saveUndo();
+    best.type = 'polyline';
+    best.points = [{ ...best.points[0] }, { ...cp.pt }, { ...best.points[1] }];
+    reattachNodes([best.id]);
+    refreshAfterEdit();
+    setStatus('Vértice inserido');
+    return;
+  }
+
+  if (best.type === 'polyline') {
+    let bi = -1, bpt = null, bd = Infinity;
+    for (let i = 1; i < best.points.length; i++) {
+      const a = best.points[i-1], b = best.points[i];
+      const dx = b.x-a.x, dy = b.y-a.y, len2 = dx*dx+dy*dy;
+      let u = len2 > 1e-12 ? ((wp.x-a.x)*dx + (wp.y-a.y)*dy)/len2 : 0;
+      u = Math.max(0, Math.min(1, u));
+      const pt = { x: a.x+u*dx, y: a.y+u*dy };
+      const d = Math.hypot(wp.x-pt.x, wp.y-pt.y);
+      if (d < bd) { bd = d; bi = i; bpt = pt; }
+    }
+    if (bi < 0) return;
+    saveUndo();
+    best.points.splice(bi, 0, { ...bpt });
+    reattachNodes([best.id]);
+    refreshAfterEdit();
+    setStatus('Vértice inserido');
+    return;
+  }
+
+  setStatus('Inserção de vértice disponível para linha/polilinha');
+}
+
+// ── HUDs DAS NOVAS FERRAMENTAS ────────────────────────────
+function showCoordHud() {
+  document.getElementById('coord-hud').classList.remove('hidden');
+  setTimeout(() => document.getElementById('coord-x-input').focus(), 20);
+}
+function hideCoordHud() { document.getElementById('coord-hud').classList.add('hidden'); }
+
+function applyCoordHud() {
+  const x = parseFloat(document.getElementById('coord-x-input').value);
+  const y = parseFloat(document.getElementById('coord-y-input').value);
+  if (isNaN(x) || isNaN(y)) { toast('Coordenadas inválidas', 'warn'); return; }
+  const mode = document.getElementById('coord-mode').value;
+  let target = { x, y };
+  if (mode === 'rel' && ui.lineStart) {
+    target = { x: ui.lineStart.x + x, y: ui.lineStart.y + y };
+  }
+  if (ui.lineStart) commitLine(ui.lineStart, target);
+  ui.lineStart = { ...target };
+  if (!document.getElementById('polar-hud').classList.contains('hidden')) {
+    updatePolarHudOrigin(target);
+  }
+  updatePanelInfo();
+  setStatus(`Coordenada (${target.x.toFixed(2)}, ${target.y.toFixed(2)}) cm`);
+  render();
+}
+
+function showOffsetHud() { document.getElementById('offset-hud').classList.remove('hidden'); }
+function hideOffsetHud() { document.getElementById('offset-hud').classList.add('hidden'); }
+
+function showRotateHud() { document.getElementById('rotate-hud').classList.remove('hidden'); }
+function hideRotateHud() { document.getElementById('rotate-hud').classList.add('hidden'); }
+
+function showScaleHud() { document.getElementById('scale-hud').classList.remove('hidden'); }
+function hideScaleHud() { document.getElementById('scale-hud').classList.add('hidden'); }
+
+function showArrayHud() { document.getElementById('array-hud').classList.remove('hidden'); }
+function hideArrayHud() { document.getElementById('array-hud').classList.add('hidden'); }
+
+function openCoordHud()  { showCoordHud(); }
+function openOffsetHud() { showOffsetHud(); }
+function openRotateHud() { showRotateHud(); }
+function openScaleHud()  { showScaleHud(); }
+function openArrayHud()  { showArrayHud(); }
 
 // ── NÓS (ligados a segmento) ──────────────────────────────
 function placeNode(sx, sy, kind) {
@@ -497,14 +1892,14 @@ function calcTrackLength() {
     // Se mesmo segmento de início e chegada
     if (startSeg.id === endSeg.id) {
       const direct = lenStart * Math.abs(tE - tS);
-      best = { dist: direct, path: [startSeg.id], extra: 0 };
+      best = { dist: direct, path: [startSeg.id] };
       break;
     }
     const res = dijkstraGraph(graph, c.from, c.to);
     if (!res) continue;
     const total = c.extraFrom + res.dist + c.extraTo;
     if (!best || total < best.dist) {
-      best = { dist: total, path: res.path, extra: c.extraFrom + c.extraTo };
+      best = { dist: total, path: res.path, extraFrom: c.extraFrom, extraTo: c.extraTo };
     }
   }
 
@@ -515,13 +1910,17 @@ function calcTrackLength() {
     return;
   }
 
-  state.dijkstraPath = best.path;
+  const path = best.path.slice();
+  if (best.extraFrom > 1e-9 && path[0] !== startSeg.id) path.unshift(startSeg.id);
+  if (best.extraTo   > 1e-9 && path[path.length-1] !== endSeg.id) path.push(endSeg.id);
+
+  state.dijkstraPath = path;
   render();
 
   document.getElementById('dijk-result').classList.remove('hidden');
   document.getElementById('dijk-dist').textContent = best.dist.toFixed(2) + ' cm';
-  document.getElementById('dijk-segs').textContent = best.path.length;
-  toast(`Pista: ${best.dist.toFixed(1)} cm · ${best.path.length} segmentos`, 'success');
+  document.getElementById('dijk-segs').textContent = path.length;
+  toast(`Pista: ${best.dist.toFixed(1)} cm · ${path.length} segmentos`, 'success');
 }
 
 function buildGraph(EPS) {
@@ -535,12 +1934,11 @@ function buildGraph(EPS) {
   }
 
   for (const seg of state.segments) {
-    const eps = segEndpoints(seg);
-    if (eps.length < 2) continue;
-    const a = nodeIdx(eps[0]), b = nodeIdx(eps[1]);
-    const w = segLength(seg);
-    edges.push({ from: a, to: b, weight: w, segId: seg.id });
-    edges.push({ from: b, to: a, weight: w, segId: seg.id });
+    for (const e of segEdgeList(seg)) {
+      const a = nodeIdx(e.a), b = nodeIdx(e.b);
+      edges.push({ from: a, to: b, weight: e.w, segId: seg.id });
+      edges.push({ from: b, to: a, weight: e.w, segId: seg.id });
+    }
   }
   return { nodes, edges };
 }
@@ -586,7 +1984,8 @@ function dijkstraGraph(graph, src, dst) {
   const path = [];
   let cur = dst;
   while (cur !== src && cur !== -1) {
-    if (pseg[cur] !== -1) path.unshift(pseg[cur]);
+    const id = pseg[cur];
+    if (id !== -1 && path[0] !== id) path.unshift(id);
     cur = prev[cur];
   }
   return { dist: dist[dst], path };
@@ -619,7 +2018,9 @@ function selectInBox(x0,y0,x1,y1) {
   const minX=Math.min(x0,x1), maxX=Math.max(x0,x1);
   const minY=Math.min(y0,y1), maxY=Math.max(y0,y1);
   state.segments.forEach(seg => {
-    const inside = segEndpoints(seg).every(ep => {
+    const pts = segSnapPoints(seg);
+    if (!pts.length) return;
+    const inside = pts.every(ep => {
       const sp = w2s(ep.x, ep.y);
       return sp.x>=minX && sp.x<=maxX && sp.y>=minY && sp.y<=maxY;
     });
@@ -738,6 +2139,7 @@ function render() {
   if (state.showGrid)    drawGrid();
   drawWorkspaceBorder();
   drawSegments();
+  drawVertexHandles();
   drawNodes();
   if (state.showCritical) drawCriticalAlerts();
   drawPreview();
@@ -807,10 +2209,8 @@ function drawSegments() {
       ctx.strokeStyle = sel
         ? 'rgba(255,255,255,0.07)'
         : inPath
-          ? 'rgba(255,224,102,0.06)'
-          : seg.type === 'arc'
-            ? 'rgba(167,139,250,0.05)'
-            : 'rgba(74,158,255,0.05)';
+          ? 'rgba(255,255,255,0.06)'
+          : 'rgba(74,158,255,0.05)';
       ctx.lineWidth = lineWidthPx;
       ctx.lineCap   = 'round';
       ctx.lineJoin  = 'round';
@@ -826,14 +2226,10 @@ function drawSegments() {
       ctx.shadowColor = 'rgba(255,255,255,0.35)';
       ctx.shadowBlur  = 6;
     } else if (inPath) {
-      ctx.strokeStyle = '#ffe066';
+      ctx.strokeStyle = '#ffffff';
       ctx.lineWidth   = baseW + 1;
-      ctx.shadowColor = 'rgba(255,224,102,0.45)';
+      ctx.shadowColor = 'rgba(255,255,255,0.45)';
       ctx.shadowBlur  = 8;
-    } else if (seg.type === 'arc') {
-      ctx.strokeStyle = '#a78bfa';
-      ctx.lineWidth   = baseW;
-      ctx.shadowBlur  = 0;
     } else {
       ctx.strokeStyle = '#4a9eff';
       ctx.lineWidth   = baseW;
@@ -860,16 +2256,38 @@ function strokeSegPath(seg) {
     const p1 = w2s(seg.points[1].x, seg.points[1].y);
     ctx.moveTo(p0.x, p0.y); ctx.lineTo(p1.x, p1.y);
   } else if (seg.type === 'arc') {
-    const [p0,pm,p1] = seg.points;
-    const sp0 = w2s(p0.x,p0.y), spm = w2s(pm.x,pm.y), sp1 = w2s(p1.x,p1.y);
-    ctx.moveTo(sp0.x, sp0.y);
-    ctx.quadraticCurveTo(spm.x, spm.y, sp1.x, sp1.y);
+    const g = arcGeometry(seg);
+    if (g) {
+      const N = Math.max(24, Math.min(120, Math.ceil(Math.abs(g.sweep) * 18)));
+      for (let i = 0; i <= N; i++) {
+        const wp = arcPointAt(seg, i / N);
+        const sp = w2s(wp.x, wp.y);
+        if (i === 0) ctx.moveTo(sp.x, sp.y);
+        else         ctx.lineTo(sp.x, sp.y);
+      }
+    } else {
+      const sp0 = w2s(seg.points[0].x, seg.points[0].y);
+      const sp1 = w2s(seg.points[2].x, seg.points[2].y);
+      ctx.moveTo(sp0.x, sp0.y); ctx.lineTo(sp1.x, sp1.y);
+    }
+  } else if (seg.type === 'polyline') {
+    for (let i = 0; i < seg.points.length; i++) {
+      const sp = w2s(seg.points[i].x, seg.points[i].y);
+      if (i === 0) ctx.moveTo(sp.x, sp.y);
+      else         ctx.lineTo(sp.x, sp.y);
+    }
+  } else if (seg.type === 'circle') {
+    const c = w2s(seg.points[0].x, seg.points[0].y);
+    ctx.arc(c.x, c.y, cm2px(seg.radius), 0, Math.PI*2);
   }
   ctx.stroke();
 }
 
 function drawEndpoints(seg, sel) {
-  segEndpoints(seg).forEach(ep => {
+  let pts = segEndpoints(seg);
+  if (seg.type === 'polyline') pts = seg.points;
+  if (seg.type === 'circle')   pts = seg.points.slice(0, 1);
+  pts.forEach(ep => {
     const sp = w2s(ep.x, ep.y);
     // anel externo
     ctx.beginPath();
@@ -883,6 +2301,24 @@ function drawEndpoints(seg, sel) {
     ctx.fillStyle = sel ? '#ffffff' : '#4a9eff';
     ctx.fill();
   });
+}
+
+function drawVertexHandles() {
+  if (ui.tool !== 'vertex-edit') return;
+  for (const seg of state.segments) {
+    for (const v of segVertices(seg)) {
+      const sp = w2s(v.pt.x, v.pt.y);
+      ctx.save();
+      ctx.fillStyle   = 'rgba(255,224,102,0.15)';
+      ctx.strokeStyle = '#ffe066';
+      ctx.lineWidth   = 1;
+      ctx.beginPath();
+      ctx.rect(sp.x-4, sp.y-4, 8, 8);
+      ctx.fill();
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
 }
 
 function drawDimension(seg) {
@@ -964,28 +2400,38 @@ function drawCriticalAlerts() {
 
 function drawPreview() {
   const wp = ui.mouseWorld;
-  const pt = ui.snapTarget || wp;
+  const pt = ui.snapTarget ? { ...ui.snapTarget } : { ...wp };
 
   if (ui.tool === 'line' && ui.lineStart) {
-    const sp0 = w2s(ui.lineStart.x, ui.lineStart.y);
-    const sp1 = w2s(pt.x, pt.y);
+    const end = ui.snapTarget ? pt : pointFromConstraint(ui.lineStart, pt);
+    drawDashedLine(ui.lineStart, end, 'rgba(74,158,255,0.45)');
+    drawMeasureLabel(ui.lineStart, end);
+  }
+
+  if (ui.tool === 'polyline' && ui.polyPoints.length) {
     ctx.setLineDash([4,4]);
     ctx.strokeStyle = 'rgba(74,158,255,0.45)';
     ctx.lineWidth   = 1.5;
     ctx.lineCap     = 'round';
     ctx.beginPath();
-    ctx.moveTo(sp0.x, sp0.y); ctx.lineTo(sp1.x, sp1.y);
+    const first = w2s(ui.polyPoints[0].x, ui.polyPoints[0].y);
+    ctx.moveTo(first.x, first.y);
+    for (let i = 1; i < ui.polyPoints.length; i++) {
+      const sp = w2s(ui.polyPoints[i].x, ui.polyPoints[i].y);
+      ctx.lineTo(sp.x, sp.y);
+    }
+    const last = ui.polyPoints[ui.polyPoints.length-1];
+    const end  = ui.snapTarget ? pt : pointFromConstraint(last, pt);
+    const esp  = w2s(end.x, end.y);
+    ctx.lineTo(esp.x, esp.y);
     ctx.stroke();
     ctx.setLineDash([]);
-
-    // comprimento em tempo real
-    const dist = Math.hypot(pt.x-ui.lineStart.x, pt.y-ui.lineStart.y);
-    const mx   = (sp0.x+sp1.x)/2, my = (sp0.y+sp1.y)/2;
-    ctx.font = '10px JetBrains Mono, monospace';
-    ctx.fillStyle = 'rgba(255,255,255,0.5)';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'bottom';
-    ctx.fillText(`${dist.toFixed(2)}cm`, mx, my-6);
+    drawMeasureLabel(last, end);
+    ui.polyPoints.forEach(p => {
+      const sp = w2s(p.x, p.y);
+      ctx.beginPath(); ctx.arc(sp.x, sp.y, 3, 0, Math.PI*2);
+      ctx.fillStyle = '#4a9eff'; ctx.fill();
+    });
   }
 
   if (ui.tool === 'arc' && ui.arcPoints.length > 0) {
@@ -995,23 +2441,95 @@ function drawPreview() {
       ctx.fillStyle = '#a78bfa'; ctx.fill();
     });
     ctx.setLineDash([4,4]);
-    ctx.strokeStyle = 'rgba(167,139,250,0.45)';
+    ctx.strokeStyle = 'rgba(74,158,255,0.55)';
     ctx.lineWidth   = 1.5;
-    const sp1 = w2s(pt.x, pt.y);
     if (ui.arcPoints.length === 2) {
-      const spm = w2s(ui.arcPoints[1].x, ui.arcPoints[1].y);
-      const sp0 = w2s(ui.arcPoints[0].x, ui.arcPoints[0].y);
+      const probe = { type:'arc', points:[ui.arcPoints[0], ui.arcPoints[1], pt] };
       ctx.beginPath();
-      ctx.moveTo(sp0.x,sp0.y);
-      ctx.quadraticCurveTo(spm.x,spm.y,sp1.x,sp1.y);
+      if (arcGeometry(probe)) {
+        const g = arcGeometry(probe);
+        const N = Math.max(16, Math.min(80, Math.ceil(Math.abs(g.sweep) * 12)));
+        for (let i = 0; i <= N; i++) {
+          const pp = arcPointAt(probe, i/N);
+          const sp = w2s(pp.x, pp.y);
+          if (i === 0) ctx.moveTo(sp.x, sp.y);
+          else         ctx.lineTo(sp.x, sp.y);
+        }
+      } else {
+        const a = w2s(ui.arcPoints[0].x, ui.arcPoints[0].y);
+        const b = w2s(pt.x, pt.y);
+        ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y);
+      }
       ctx.stroke();
     } else {
-      const sp0 = w2s(ui.arcPoints[0].x, ui.arcPoints[0].y);
-      ctx.beginPath(); ctx.moveTo(sp0.x,sp0.y); ctx.lineTo(sp1.x,sp1.y);
-      ctx.stroke();
+      const a = w2s(ui.arcPoints[0].x, ui.arcPoints[0].y);
+      const b = w2s(pt.x, pt.y);
+      ctx.beginPath(); ctx.moveTo(a.x,a.y); ctx.lineTo(b.x,b.y); ctx.stroke();
     }
     ctx.setLineDash([]);
   }
+
+  if (ui.tool === 'circle' && ui.circleCenter) {
+    const c  = ui.circleCenter;
+    const r  = Math.hypot(pt.x-c.x, pt.y-c.y);
+    const sc = w2s(c.x, c.y);
+    const sp = w2s(pt.x, pt.y);
+    ctx.setLineDash([4,4]);
+    ctx.strokeStyle = 'rgba(74,158,255,0.6)';
+    ctx.lineWidth   = 1.5;
+    ctx.beginPath(); ctx.arc(sc.x, sc.y, cm2px(r), 0, Math.PI*2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sc.x, sc.y); ctx.lineTo(sp.x, sp.y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font = '10px JetBrains Mono, monospace';
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(`R ${r.toFixed(2)}cm`, (sc.x+sp.x)/2, (sc.y+sp.y)/2 - 6);
+  }
+
+  if (ui.tool === 'rect' && ui.rectStart) {
+    const end = ui.snapTarget ? pt : pointFromConstraint(ui.rectStart, pt);
+    const a = w2s(ui.rectStart.x, ui.rectStart.y);
+    const b = w2s(end.x, end.y);
+    ctx.setLineDash([4,4]);
+    ctx.strokeStyle = 'rgba(74,158,255,0.45)';
+    ctx.lineWidth   = 1.5;
+    ctx.strokeRect(Math.min(a.x,b.x), Math.min(a.y,b.y), Math.abs(b.x-a.x), Math.abs(b.y-a.y));
+    ctx.setLineDash([]);
+    ctx.font = '10px JetBrains Mono, monospace';
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(`${Math.abs(end.x-ui.rectStart.x).toFixed(2)} × ${Math.abs(end.y-ui.rectStart.y).toFixed(2)} cm`,
+                 (a.x+b.x)/2, Math.min(a.y,b.y)-6);
+  }
+
+  if (ui.tool === 'mirror' && ui.mirrorPts.length === 1) {
+    drawDashedLine(ui.mirrorPts[0], pt, 'rgba(232,0,61,0.6)');
+  }
+}
+
+function drawDashedLine(a, b, color) {
+  const sp0 = w2s(a.x, a.y), sp1 = w2s(b.x, b.y);
+  ctx.setLineDash([4,4]);
+  ctx.strokeStyle = color;
+  ctx.lineWidth   = 1.5;
+  ctx.lineCap     = 'round';
+  ctx.beginPath();
+  ctx.moveTo(sp0.x, sp0.y); ctx.lineTo(sp1.x, sp1.y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+function drawMeasureLabel(a, b) {
+  const dist = Math.hypot(b.x-a.x, b.y-a.y);
+  const ang  = ((Math.atan2(-(b.y-a.y), b.x-a.x) * 180/Math.PI) + 360) % 360;
+  const sp0 = w2s(a.x, a.y), sp1 = w2s(b.x, b.y);
+  ctx.font = '10px JetBrains Mono, monospace';
+  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.fillText(`${dist.toFixed(2)}cm · ${ang.toFixed(1)}°`, (sp0.x+sp1.x)/2, (sp0.y+sp1.y)/2 - 6);
 }
 
 function drawMagneticIndicator() {
@@ -1050,7 +2568,15 @@ function fitView() {
     if(x<minX)minX=x; if(x>maxX)maxX=x;
     if(y<minY)minY=y; if(y>maxY)maxY=y;
   };
-  state.segments.forEach(s => s.points.forEach(p => exp(p.x,p.y)));
+  state.segments.forEach(s => {
+    if (s.type === 'circle') {
+      const c = s.points[0];
+      exp(c.x - s.radius, c.y - s.radius);
+      exp(c.x + s.radius, c.y + s.radius);
+    } else {
+      s.points.forEach(p => exp(p.x, p.y));
+    }
+  });
   ['start','end'].forEach(k => { if(state.nodes[k]) exp(state.nodes[k].x,state.nodes[k].y); });
   if (!isFinite(minX)) { exp(0,0); exp(state.workspace.w, state.workspace.h); }
 
@@ -1097,13 +2623,26 @@ function onMouseDown(e) {
   if (e.button !== 0) return;
 
   switch (ui.tool) {
-    case 'select':     handleSelectDown(sx, sy, e); break;
-    case 'line':       lineClick(wp.x, wp.y);        break;
-    case 'arc':        arcClick(wp.x, wp.y);          break;
-    case 'fillet':     filletClick(wp.x, wp.y);       break;
-    case 'start-node': placeNode(sx, sy, 'start');    break;
-    case 'end-node':   placeNode(sx, sy, 'end');      break;
-    case 'move':       openMoveHud();                 break;
+    case 'select':      handleSelectDown(sx, sy, e); break;
+    case 'line':        lineClick(wp.x, wp.y);        break;
+    case 'arc':         arcClick(wp.x, wp.y);         break;
+    case 'circle':      circleClick(wp.x, wp.y);      break;
+    case 'rect':        rectClick(wp.x, wp.y);        break;
+    case 'polyline':    polyClick(wp.x, wp.y);        break;
+    case 'fillet':      filletClick(wp.x, wp.y);      break;
+    case 'start-node':  placeNode(sx, sy, 'start');   break;
+    case 'end-node':    placeNode(sx, sy, 'end');     break;
+    case 'move':        openMoveHud();                break;
+    case 'vertex-edit': vertexEditDown(sx, sy, e);    break;
+    case 'trim':        trimClick(wp.x, wp.y);        break;
+    case 'extend':      extendClick(wp.x, wp.y);      break;
+    case 'join':        joinSelected();               break;
+    case 'break':       breakClick(wp.x, wp.y);       break;
+    case 'offset':      offsetClick(wp.x, wp.y);      break;
+    case 'mirror':      mirrorClick(wp.x, wp.y);      break;
+    case 'rotate':      openRotateHud();               break;
+    case 'scale':       openScaleHud();                break;
+    case 'array':       openArrayHud();                break;
   }
 }
 
@@ -1114,8 +2653,28 @@ function onMouseMove(e) {
   ui.mouseScreen = { x: sx, y: sy };
   ui.mouseWorld  = wp;
 
-  // Snap magnético
-  ui.snapTarget = getMagneticSnap(sx, sy);
+  // Snap magnético (ignora o próprio vértice que está sendo arrastado)
+  ui.snapTarget = getMagneticSnap(sx, sy, ui.dragVertex);
+
+  // Arrasto de vértice (Editar Vértice)
+  if (ui.dragVertex) {
+    const seg = state.segments.find(s => s.id === ui.dragVertex.segId);
+    if (seg) {
+      let target = ui.snapTarget ? { ...ui.snapTarget } : { ...wp };
+      if (!ui.snapTarget) {
+        if (seg.type === 'line') {
+          const other = seg.points[ui.dragVertex.idx === 0 ? 1 : 0];
+          target = pointFromConstraint(other, target);
+        } else if (seg.type === 'polyline') {
+          const idx = ui.dragVertex.idx;
+          const nb  = idx > 0 ? seg.points[idx-1] : seg.points[idx+1];
+          if (nb) target = pointFromConstraint(nb, target);
+        }
+      }
+      seg.points[ui.dragVertex.idx] = { ...target };
+      state.dijkstraPath = [];
+    }
+  }
 
   const display = ui.snapTarget || wp;
   document.getElementById('coord-x').textContent = display.x.toFixed(2);
@@ -1141,6 +2700,17 @@ function onMouseUp(e) {
     canvas.classList.remove('cursor-pan');
     return;
   }
+  if (e.button === 0 && ui.dragVertex) {
+    const segId = ui.dragVertex.segId;
+    ui.dragVertex = null;
+    reattachNodes([segId]);
+    state.dijkstraPath = [];
+    updatePanelInfo();
+    updateSelectionPanel();
+    render();
+    setStatus('Vértice atualizado');
+    return;
+  }
   if (ui.boxSelStart) {
     const { sx, sy } = getCanvasXY(e);
     selectInBox(ui.boxSelStart.x, ui.boxSelStart.y, sx, sy);
@@ -1157,6 +2727,14 @@ function onDblClick() {
     hidePolarHud();
     setStatus('Linha finalizada');
     render();
+    return;
+  }
+  if (ui.tool === 'polyline') {
+    finalizePolyline();
+    return;
+  }
+  if (ui.tool === 'vertex-edit') {
+    insertVertexAt(ui.mouseScreen.x, ui.mouseScreen.y);
   }
 }
 
@@ -1192,8 +2770,10 @@ function clearBoxSelectDOM() {
 
 // ── KEYBOARD ─────────────────────────────────────────────
 document.addEventListener('keydown', onKeyDown);
+document.addEventListener('keyup', e => { ui.shiftKey = e.shiftKey; });
 
 function onKeyDown(e) {
+  ui.shiftKey = e.shiftKey;
   // Ignorar se foco está em campo de texto EXCETO para Escape e Enter em HUDs
   const tag  = document.activeElement.tagName;
   const inInput = (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA');
@@ -1214,12 +2794,50 @@ function onKeyDown(e) {
     if (!document.getElementById('move-hud').classList.contains('hidden')) {
       applyPrecisionMove();
     }
+    if (!document.getElementById('coord-hud').classList.contains('hidden')) {
+      applyCoordHud();
+    }
+    if (!document.getElementById('rotate-hud').classList.contains('hidden')) {
+      applyRotate();
+    }
+    if (!document.getElementById('scale-hud').classList.contains('hidden')) {
+      applyScale();
+    }
+    if (!document.getElementById('array-hud').classList.contains('hidden')) {
+      applyArray();
+    }
+    if (ui.tool === 'rotate' || ui.tool === 'scale' || ui.tool === 'array') {
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    }
     return;
   }
 
   if (inInput) return;
 
   const ctrl = e.ctrlKey || e.metaKey;
+
+  // Enter finaliza construções no canvas
+  if (e.key === 'Enter') {
+    if (ui.tool === 'polyline') { e.preventDefault(); finalizePolyline(); return; }
+    if (ui.tool === 'line') {
+      e.preventDefault();
+      ui.lineStart = null;
+      hidePolarHud();
+      setStatus('Linha finalizada');
+      render();
+      return;
+    }
+  }
+
+  // Atalhos com Shift (não conflitam com os atalhos simples)
+  if (e.shiftKey && !ctrl) {
+    switch (e.key) {
+      case 'R': e.preventDefault(); setTool('rotate'); openRotateHud(); return;
+      case 'S': e.preventDefault(); setTool('scale');  openScaleHud();  return;
+      case 'A': e.preventDefault(); setTool('array');  openArrayHud();  return;
+      case 'V': e.preventDefault(); setTool('vertex-edit'); return;
+    }
+  }
 
   if (ctrl && e.key === 'z') { e.preventDefault(); undo(); return; }
   if (ctrl && (e.key==='y'||e.key==='Y')) { e.preventDefault(); redo(); return; }
@@ -1234,6 +2852,16 @@ function onKeyDown(e) {
     case 'a': case 'A': if (!ctrl) setTool('arc'); break;
     case 'r': case 'R': setTool('fillet'); break;
     case 'm': case 'M': setTool('move'); openMoveHud(); break;
+    case 'c': case 'C': if (!ctrl) setTool('circle');   break;
+    case 'b': case 'B': if (!ctrl) setTool('rect');     break;
+    case 'p': case 'P': if (!ctrl) setTool('polyline'); break;
+    case 'o': case 'O': if (!ctrl) setTool('offset');   break;
+    case 't': case 'T': if (!ctrl) setTool('trim');     break;
+    case 'e': case 'E': if (!ctrl) setTool('extend');   break;
+    case 'j': case 'J': if (!ctrl) setTool('join');     break;
+    case 'k': case 'K': if (!ctrl) setTool('break');    break;
+    case 'x': case 'X': if (!ctrl) setTool('mirror');   break;
+    case 'q': case 'Q': if (!ctrl) { setTool('line'); openCoordHud(); } break;
     case '1': setTool('start-node'); break;
     case '2': setTool('end-node');   break;
     case 'Delete': case 'Backspace': deleteSelection(); break;
@@ -1258,11 +2886,23 @@ function onKeyDown(e) {
 }
 
 function cancelCurrentTool() {
-  ui.lineStart = null;
-  ui.arcPoints = [];
+  if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+  ui.lineStart    = null;
+  ui.arcPoints    = [];
+  ui.polyPoints   = [];
+  ui.rectStart    = null;
+  ui.circleCenter = null;
+  ui.mirrorPts    = [];
+  ui.dragVertex   = null;
+  ui.offsetTargetId = null;
   hidePolarHud();
   hideFilletHud();
   hideMoveHud();
+  hideCoordHud();
+  hideOffsetHud();
+  hideRotateHud();
+  hideScaleHud();
+  hideArrayHud();
   ui.selection.clear();
   updateSelectionPanel();
   setTool('select');
@@ -1332,9 +2972,10 @@ function updateSelectionPanel() {
   document.getElementById('sel-props').classList.remove('hidden');
 
   const segs = state.segments.filter(s => ui.selection.has(s.id));
+  const TYPE_NAMES = { line:'Linha', arc:'Arco', polyline:'Polilinha', circle:'Círculo' };
   if (segs.length === 1) {
     const s = segs[0];
-    document.getElementById('sel-type').textContent = s.type === 'line' ? 'Linha' : 'Arco';
+    document.getElementById('sel-type').textContent = TYPE_NAMES[s.type] || s.type;
     document.getElementById('sel-len').textContent  = segLength(s).toFixed(3)+' cm';
     document.getElementById('sel-resize-val').value = segLength(s).toFixed(2);
     document.getElementById('sel-line-controls').style.display = s.type==='line'?'block':'none';
@@ -1396,12 +3037,14 @@ document.getElementById('line-width-input').addEventListener('change', () => {
 // ── SAVE / LOAD ───────────────────────────────────────────
 function saveJSON() {
   const data = JSON.stringify({
-    version:   3,
+    version:   4,
     segments:  state.segments,
     nodes:     state.nodes,
     nextId:    state.nextId,
     workspace: state.workspace,
     lineWidth: state.lineWidth,
+    angleSnap: state.angleSnap,
+    angleStep: state.angleStep,
   }, null, 2);
   const a = document.createElement('a');
   a.href     = URL.createObjectURL(new Blob([data],{type:'application/json'}));
@@ -1428,6 +3071,14 @@ function loadJSON(file) {
         document.getElementById('workspace-w').value = d.workspace.w;
         document.getElementById('workspace-h').value = d.workspace.h;
       }
+      if (typeof d.angleSnap === 'boolean') state.angleSnap = d.angleSnap;
+      if (typeof d.angleStep === 'number') {
+        state.angleStep = d.angleStep;
+        const stepEl = document.getElementById('angle-step-input');
+        if (stepEl) stepEl.value = d.angleStep;
+      }
+      const angBtn = document.getElementById('btn-toggle-angle');
+      if (angBtn) angBtn.classList.toggle('active', state.angleSnap);
       state.dijkstraPath = [];
       ui.selection.clear();
       updatePanelInfo();
@@ -1454,9 +3105,22 @@ function newProject() {
   state.undoStack = [];
   state.redoStack = [];
   ui.selection.clear();
-  ui.lineStart = null;
-  ui.arcPoints = [];
+  ui.lineStart    = null;
+  ui.arcPoints    = [];
+  ui.polyPoints   = [];
+  ui.rectStart    = null;
+  ui.circleCenter = null;
+  ui.mirrorPts    = [];
+  ui.dragVertex   = null;
+  ui.offsetTargetId = null;
   hidePolarHud();
+  hideFilletHud();
+  hideMoveHud();
+  hideCoordHud();
+  hideOffsetHud();
+  hideRotateHud();
+  hideScaleHud();
+  hideArrayHud();
   updatePanelInfo();
   updateDijkstraPanel();
   updateSelectionPanel();
@@ -1479,10 +3143,20 @@ function exportPDF() {
   };
 
   let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
-  state.segments.forEach(s => s.points.forEach(p => {
-    if(p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x;
-    if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y;
-  }));
+  state.segments.forEach(s => {
+    if (s.type === 'circle') {
+      const c = s.points[0];
+      if (c.x-s.radius<minX) minX=c.x-s.radius;
+      if (c.x+s.radius>maxX) maxX=c.x+s.radius;
+      if (c.y-s.radius<minY) minY=c.y-s.radius;
+      if (c.y+s.radius>maxY) maxY=c.y+s.radius;
+    } else {
+      s.points.forEach(p => {
+        if(p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x;
+        if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y;
+      });
+    }
+  });
 
   const trackW = maxX-minX, trackH = maxY-minY;
   let pageW, pageH;
@@ -1509,25 +3183,50 @@ function exportPDF() {
   const bg   = invert ? '#000000' : '#ffffff';
   const fg   = invert ? '#ffffff' : '#1a1a2e';
   const pathColor = invert ? '#ffffff' : '#1a1a2e';
-  const dijkColor = invert ? '#ffe066' : '#b8860b'; // amarelo em fundo preto, dourado em branco
+  const dijkColor = invert ? '#ffffff' : '#b8860b'; // branco em fundo preto, dourado em branco
 
   let paths = '';
   for (const seg of state.segments) {
     const inPath = state.dijkstraPath.includes(seg.id);
-    const color  = inPath ? dijkColor : (seg.type==='arc' ? (invert?'#c4b5fd':'#7c3aed') : pathColor);
+    const color  = inPath ? dijkColor : pathColor;
     const sw     = Math.max(0.5, state.lineWidth * drawScale * CM2SVG);
 
-    let d = '';
-    if (seg.type === 'line') {
-      const p0=toSVG(seg.points[0].x,seg.points[0].y);
-      const p1=toSVG(seg.points[1].x,seg.points[1].y);
-      d = `M${p0.x.toFixed(2)},${p0.y.toFixed(2)} L${p1.x.toFixed(2)},${p1.y.toFixed(2)}`;
-    } else if (seg.type === 'arc') {
-      const [p0,pm,p1] = seg.points;
-      const sp0=toSVG(p0.x,p0.y), spm=toSVG(pm.x,pm.y), sp1=toSVG(p1.x,p1.y);
-      d = `M${sp0.x.toFixed(2)},${sp0.y.toFixed(2)} Q${spm.x.toFixed(2)},${spm.y.toFixed(2)} ${sp1.x.toFixed(2)},${sp1.y.toFixed(2)}`;
+    if (seg.type === 'circle') {
+      const c = toSVG(seg.points[0].x, seg.points[0].y);
+      const r = seg.radius * drawScale * CM2SVG;
+      paths += `<circle cx="${c.x.toFixed(2)}" cy="${c.y.toFixed(2)}" r="${r.toFixed(2)}" stroke="${color}" stroke-width="${sw.toFixed(2)}" fill="none"/>`;
+    } else {
+      let d = '';
+      if (seg.type === 'line') {
+        const p0=toSVG(seg.points[0].x,seg.points[0].y);
+        const p1=toSVG(seg.points[1].x,seg.points[1].y);
+        d = `M${p0.x.toFixed(2)},${p0.y.toFixed(2)} L${p1.x.toFixed(2)},${p1.y.toFixed(2)}`;
+      } else if (seg.type === 'arc') {
+        const g = arcGeometry(seg);
+        if (g) {
+          const N = Math.max(16, Math.min(120, Math.ceil(Math.abs(g.sweep) * 18)));
+          const p0 = toSVG(seg.points[0].x, seg.points[0].y);
+          d = `M${p0.x.toFixed(2)},${p0.y.toFixed(2)}`;
+          for (let i = 1; i <= N; i++) {
+            const pp = arcPointAt(seg, i/N);
+            const sp = toSVG(pp.x, pp.y);
+            d += ` L${sp.x.toFixed(2)},${sp.y.toFixed(2)}`;
+          }
+        } else {
+          const sp0 = toSVG(seg.points[0].x, seg.points[0].y);
+          const sp1 = toSVG(seg.points[2].x, seg.points[2].y);
+          d = `M${sp0.x.toFixed(2)},${sp0.y.toFixed(2)} L${sp1.x.toFixed(2)},${sp1.y.toFixed(2)}`;
+        }
+      } else if (seg.type === 'polyline') {
+        const first = toSVG(seg.points[0].x, seg.points[0].y);
+        d = `M${first.x.toFixed(2)},${first.y.toFixed(2)}`;
+        for (let i = 1; i < seg.points.length; i++) {
+          const sp = toSVG(seg.points[i].x, seg.points[i].y);
+          d += ` L${sp.x.toFixed(2)},${sp.y.toFixed(2)}`;
+        }
+      }
+      if (d) paths += `<path d="${d}" stroke="${color}" stroke-width="${sw.toFixed(2)}" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
     }
-    if (d) paths += `<path d="${d}" stroke="${color}" stroke-width="${sw.toFixed(2)}" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
 
     // cotas
     if (cotas && seg.type==='line' && segLength(seg)>=MIN_COTA_CM) {
@@ -1629,6 +3328,20 @@ document.querySelectorAll('[data-action]').forEach(btn => {
       case 'toggle-crit':
         state.showCritical = !state.showCritical;
         render(); break;
+      case 'coord':         setTool('line'); openCoordHud(); break;
+      case 'tool-circle':   setTool('circle');   break;
+      case 'tool-rect':     setTool('rect');     break;
+      case 'tool-polyline': setTool('polyline'); break;
+      case 'tool-offset':   setTool('offset');   break;
+      case 'tool-mirror':   setTool('mirror');   break;
+      case 'tool-rotate':   setTool('rotate');   break;
+      case 'tool-scale':    setTool('scale');    break;
+      case 'tool-array':    setTool('array');    break;
+      case 'tool-vertex':   setTool('vertex-edit'); break;
+      case 'tool-trim':     setTool('trim');     break;
+      case 'tool-extend':   setTool('extend');   break;
+      case 'tool-join':     setTool('join');     break;
+      case 'tool-break':    setTool('break');    break;
     }
   });
 });
@@ -1672,6 +3385,43 @@ document.getElementById('move-confirm-btn').addEventListener('click', applyPreci
 document.getElementById('move-cancel-btn').addEventListener('click', () => {
   hideMoveHud();
   setTool('select');
+});
+
+// HUD coordenadas
+document.getElementById('coord-confirm-btn').addEventListener('click', applyCoordHud);
+document.getElementById('coord-cancel-btn').addEventListener('click', () => {
+  hideCoordHud();
+});
+document.getElementById('coord-mode').addEventListener('change', e => {
+  ui.coordMode = e.target.value;
+});
+
+// HUD rotate / scale / array
+document.getElementById('rotate-apply-btn').addEventListener('click', applyRotate);
+document.getElementById('rotate-cancel-btn').addEventListener('click', () => {
+  hideRotateHud();
+  setTool('select');
+});
+document.getElementById('scale-apply-btn').addEventListener('click', applyScale);
+document.getElementById('scale-cancel-btn').addEventListener('click', () => {
+  hideScaleHud();
+  setTool('select');
+});
+document.getElementById('array-apply-btn').addEventListener('click', applyArray);
+document.getElementById('array-cancel-btn').addEventListener('click', () => {
+  hideArrayHud();
+  setTool('select');
+});
+
+// Snap angular configurável
+document.getElementById('btn-toggle-angle').addEventListener('click', () => {
+  state.angleSnap = !state.angleSnap;
+  document.getElementById('btn-toggle-angle').classList.toggle('active', state.angleSnap);
+  render();
+});
+document.getElementById('angle-step-input').addEventListener('change', () => {
+  const v = parseFloat(document.getElementById('angle-step-input').value);
+  if (!isNaN(v) && v > 0) state.angleStep = v;
 });
 
 // Previne Tab de sair dos HUDs — navega entre os campos internos

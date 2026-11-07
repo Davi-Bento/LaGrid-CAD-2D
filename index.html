@@ -48,6 +48,28 @@
         </div>
       </div>
       <div class="menu-group">
+        <button class="menu-btn">Ferramentas</button>
+        <div class="menu-dropdown">
+          <button data-action="coord">Coordenadas…</button>
+          <hr/>
+          <button data-action="tool-circle">Círculo <span class="kbd">C</span></button>
+          <button data-action="tool-rect">Retângulo <span class="kbd">B</span></button>
+          <button data-action="tool-polyline">Polilinha <span class="kbd">P</span></button>
+          <hr/>
+          <button data-action="tool-offset">Offset <span class="kbd">O</span></button>
+          <button data-action="tool-mirror">Mirror <span class="kbd">X</span></button>
+          <button data-action="tool-rotate">Rotate <span class="kbd">Shift+R</span></button>
+          <button data-action="tool-scale">Scale <span class="kbd">Shift+S</span></button>
+          <button data-action="tool-array">Array <span class="kbd">Shift+A</span></button>
+          <hr/>
+          <button data-action="tool-vertex">Editar Vértice <span class="kbd">Shift+V</span></button>
+          <button data-action="tool-trim">Trim <span class="kbd">T</span></button>
+          <button data-action="tool-extend">Extend <span class="kbd">E</span></button>
+          <button data-action="tool-join">Join <span class="kbd">J</span></button>
+          <button data-action="tool-break">Break <span class="kbd">K</span></button>
+        </div>
+      </div>
+      <div class="menu-group">
         <button class="menu-btn">Análise</button>
         <div class="menu-dropdown">
           <button data-action="dijkstra">Calcular Comprimento da Pista <span class="kbd">F5</span></button>
@@ -106,6 +128,22 @@
     </div>
 
     <div class="tool-section">
+      <div class="tool-section-label">GEO</div>
+      <button class="tool-btn" id="tool-circle" data-tool="circle" title="Círculo (C)">
+        <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7" stroke="currentColor" stroke-width="2" fill="none"/><circle cx="10" cy="10" r="1.5" fill="currentColor"/></svg>
+        <span>C</span>
+      </button>
+      <button class="tool-btn" id="tool-rect" data-tool="rect" title="Retângulo (B)">
+        <svg viewBox="0 0 20 20"><rect x="3" y="5" width="14" height="10" stroke="currentColor" stroke-width="2" fill="none"/></svg>
+        <span>B</span>
+      </button>
+      <button class="tool-btn" id="tool-polyline" data-tool="polyline" title="Polilinha (P)">
+        <svg viewBox="0 0 20 20"><path d="M3 16 L8 6 L12 12 L17 4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>P</span>
+      </button>
+    </div>
+
+    <div class="tool-section">
       <div class="tool-section-label">NÓS</div>
       <button class="tool-btn" id="tool-start" data-tool="start-node" title="Nó Início (1)">
         <svg viewBox="0 0 20 20"><circle cx="10" cy="10" r="7" stroke="#00ff87" stroke-width="2" fill="none"/><text x="10" y="14" text-anchor="middle" font-size="8" fill="#00ff87" font-family="monospace">S</text></svg>
@@ -122,6 +160,54 @@
       <button class="tool-btn" id="tool-move" data-tool="move" title="Mover com Precisão (M)">
         <svg viewBox="0 0 20 20"><path d="M10 3 L10 17 M3 10 L17 10 M10 3 L7 6 M10 3 L13 6 M10 17 L7 14 M10 17 L13 14 M3 10 L6 7 M3 10 L6 13 M17 10 L14 7 M17 10 L14 13" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
         <span>M</span>
+      </button>
+    </div>
+
+    <div class="tool-section">
+      <div class="tool-section-label">MOD</div>
+      <button class="tool-btn" id="tool-offset" data-tool="offset" title="Offset (O)">
+        <svg viewBox="0 0 20 20"><path d="M3 6 L17 6 M3 14 L17 14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <span>O</span>
+      </button>
+      <button class="tool-btn" id="tool-mirror" data-tool="mirror" title="Mirror (X)">
+        <svg viewBox="0 0 20 20"><path d="M10 2 L10 18" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2 2"/><path d="M8 5 L3 10 L8 15 Z M12 5 L17 10 L12 15 Z" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+        <span>X</span>
+      </button>
+      <button class="tool-btn" id="tool-rotate" data-tool="rotate" title="Rotate (Shift+R)">
+        <svg viewBox="0 0 20 20"><path d="M16 10 A6 6 0 1 1 10 4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><polyline points="9,1 13,4 9,7" stroke="currentColor" stroke-width="2" fill="none" stroke-linejoin="round"/></svg>
+        <span>R</span>
+      </button>
+      <button class="tool-btn" id="tool-scale" data-tool="scale" title="Scale (Shift+S)">
+        <svg viewBox="0 0 20 20"><path d="M4 16 L16 4 M10 4 L16 4 L16 10" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><rect x="3" y="13" width="4" height="4" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+        <span>S</span>
+      </button>
+      <button class="tool-btn" id="tool-array" data-tool="array" title="Array (Shift+A)">
+        <svg viewBox="0 0 20 20"><rect x="3" y="3" width="5" height="5" stroke="currentColor" stroke-width="1.5" fill="none"/><rect x="12" y="3" width="5" height="5" stroke="currentColor" stroke-width="1.5" fill="none"/><rect x="3" y="12" width="5" height="5" stroke="currentColor" stroke-width="1.5" fill="none"/><rect x="12" y="12" width="5" height="5" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+        <span>A</span>
+      </button>
+    </div>
+
+    <div class="tool-section">
+      <div class="tool-section-label">EDIT</div>
+      <button class="tool-btn" id="tool-vertex" data-tool="vertex-edit" title="Editar Vértice (Shift+V)">
+        <svg viewBox="0 0 20 20"><path d="M3 16 L10 4 L17 16" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linejoin="round"/><rect x="8" y="2" width="4" height="4" fill="currentColor"/><rect x="1" y="14" width="4" height="4" fill="currentColor"/><rect x="15" y="14" width="4" height="4" fill="currentColor"/></svg>
+        <span>V</span>
+      </button>
+      <button class="tool-btn" id="tool-trim" data-tool="trim" title="Trim (T)">
+        <svg viewBox="0 0 20 20"><path d="M3 10 L17 10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M11 4 L16 9 M16 4 L11 9" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        <span>T</span>
+      </button>
+      <button class="tool-btn" id="tool-extend" data-tool="extend" title="Extend (E)">
+        <svg viewBox="0 0 20 20"><path d="M3 16 L11 16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M12 16 L17 16 M14 13 L17 16 L14 19" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><path d="M18 4 L18 18" stroke="currentColor" stroke-width="1.5" stroke-dasharray="2 2"/></svg>
+        <span>E</span>
+      </button>
+      <button class="tool-btn" id="tool-join" data-tool="join" title="Join (J)">
+        <svg viewBox="0 0 20 20"><path d="M3 16 L9 10 M11 10 L17 4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="10" cy="10" r="2" fill="currentColor"/></svg>
+        <span>J</span>
+      </button>
+      <button class="tool-btn" id="tool-break" data-tool="break" title="Break (K)">
+        <svg viewBox="0 0 20 20"><path d="M3 10 L8 10 M12 10 L17 10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M9 7 L10 10 L9 13 M11 7 L10 10 L11 13" stroke="currentColor" stroke-width="1.2" fill="none" stroke-linecap="round"/></svg>
+        <span>K</span>
       </button>
     </div>
 
@@ -200,6 +286,91 @@
       </div>
     </div>
 
+    <!-- HUD Coordenadas -->
+    <div id="coord-hud" class="hud-panel hidden">
+      <div class="hud-title">COORDENADAS</div>
+      <div class="hud-row">
+        <label class="hud-label" for="coord-mode">Modo</label>
+        <select id="coord-mode" class="hud-input">
+          <option value="abs">Absoluta</option>
+          <option value="rel">Relativa</option>
+        </select>
+      </div>
+      <div class="hud-row" style="margin-top:6px">
+        <label class="hud-label" for="coord-x-input">X (cm)</label>
+        <input type="number" id="coord-x-input" class="hud-input" step="0.1" placeholder="0.0" />
+      </div>
+      <div class="hud-row" style="margin-top:6px">
+        <label class="hud-label" for="coord-y-input">Y (cm)</label>
+        <input type="number" id="coord-y-input" class="hud-input" step="0.1" placeholder="0.0" />
+      </div>
+      <div class="hud-actions">
+        <button id="coord-cancel-btn" class="hud-btn">Fechar</button>
+        <button id="coord-confirm-btn" class="hud-btn primary">Aplicar ↵</button>
+      </div>
+      <div class="hud-hint">Absoluta = plano · Relativa = a partir do ponto atual</div>
+    </div>
+
+    <!-- HUD Offset -->
+    <div id="offset-hud" class="hud-panel hidden">
+      <div class="hud-title">OFFSET</div>
+      <div class="hud-row">
+        <label class="hud-label" for="offset-dist">Distância (cm)</label>
+        <input type="number" id="offset-dist" class="hud-input" value="1" step="0.1" min="0.1" />
+      </div>
+      <div class="hud-hint">1º clique escolhe o objeto · 2º clique define o lado · Esc cancela</div>
+    </div>
+
+    <!-- HUD Rotate -->
+    <div id="rotate-hud" class="hud-panel hidden">
+      <div class="hud-title">ROTATE / GIRAR</div>
+      <div class="hud-row">
+        <label class="hud-label" for="rotate-angle">Ângulo (°)</label>
+        <input type="number" id="rotate-angle" class="hud-input" value="90" step="1" />
+      </div>
+      <div class="hud-actions">
+        <button id="rotate-cancel-btn" class="hud-btn">Cancelar</button>
+        <button id="rotate-apply-btn" class="hud-btn primary">Aplicar ↵</button>
+      </div>
+      <div class="hud-hint">Gira a seleção em torno do centro</div>
+    </div>
+
+    <!-- HUD Scale -->
+    <div id="scale-hud" class="hud-panel hidden">
+      <div class="hud-title">SCALE / ESCALA</div>
+      <div class="hud-row">
+        <label class="hud-label" for="scale-factor">Fator</label>
+        <input type="number" id="scale-factor" class="hud-input" value="2" step="0.1" min="0.1" />
+      </div>
+      <div class="hud-actions">
+        <button id="scale-cancel-btn" class="hud-btn">Cancelar</button>
+        <button id="scale-apply-btn" class="hud-btn primary">Aplicar ↵</button>
+      </div>
+      <div class="hud-hint">Escala em torno do centro da seleção</div>
+    </div>
+
+    <!-- HUD Array -->
+    <div id="array-hud" class="hud-panel hidden">
+      <div class="hud-title">ARRAY / MATRIZ</div>
+      <div class="hud-row">
+        <label class="hud-label" for="array-count">Cópias</label>
+        <input type="number" id="array-count" class="hud-input" value="1" step="1" min="1" />
+      </div>
+      <div class="hud-row" style="margin-top:6px">
+        <label class="hud-label" for="array-dx">DX (cm)</label>
+        <input type="number" id="array-dx" class="hud-input" value="10" step="1" />
+      </div>
+      <div class="hud-row" style="margin-top:6px">
+        <label class="hud-label" for="array-dy">DY (cm)</label>
+        <input type="number" id="array-dy" class="hud-input" value="0" step="1" />
+      </div>
+      <div class="hud-actions">
+        <button id="array-cancel-btn" class="hud-btn">Cancelar</button>
+        <button id="array-apply-btn" class="hud-btn primary">Aplicar ↵</button>
+      </div>
+      <div class="hud-hint">Cópias espaçadas por DX/DY</div>
+    </div>
+
     <!-- Status bar -->
     <div id="status-bar">
       <span id="status-tool">SELECIONAR</span>
@@ -208,6 +379,7 @@
       <div id="status-right">
         <button id="btn-toggle-grid" class="status-toggle active" title="G">GRADE</button>
         <button id="btn-toggle-snap" class="status-toggle active" title="S">SNAP</button>
+        <button id="btn-toggle-angle" class="status-toggle" title="Snap angular (passo configurável)">ANG</button>
       </div>
     </div>
   </main>
@@ -237,6 +409,16 @@
         <input type="number" id="line-width-input" class="prop-input" value="1.9" step="0.1" min="0.1" />
       </div>
       <div class="hud-hint" style="margin-top:4px;font-size:10px">Padrão: 1.9 cm (faixa seguidor)</div>
+    </div>
+
+    <!-- Precisão -->
+    <div class="panel-section">
+      <div class="panel-title">Precisão</div>
+      <div class="prop-row">
+        <label class="prop-label">Passo angular (°)</label>
+        <input type="number" id="angle-step-input" class="prop-input" value="15" step="1" min="1" max="180" />
+      </div>
+      <div class="hud-hint" style="margin-top:4px;font-size:10px">Shift durante o desenho = ortho 90°</div>
     </div>
 
     <!-- Info -->
