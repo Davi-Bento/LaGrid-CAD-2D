@@ -35,6 +35,7 @@ const state = {
   dijkstraMode:  'shortest_path',    // 'shortest_path' | 'perimeter_loop'
   orthoLock:     false,              // ortho lock estilo AutoCAD (F8)
   showVertexCoords: true,            // mostrar coordenadas dos vértices no editor
+  showCircleQuads:  true,            // mostrar pontos N/L/S/O dos círculos
 };
 
 const cam = { x: 0, y: 0, scale: 1 };
@@ -59,6 +60,9 @@ const ui = {
   mirrorPts:    [],     // eixo do espelho em construção
   offsetTargetId: null, // objeto escolhido para offset
   coordMode:    'abs',  // 'abs' | 'rel'
+  circleMode:   'center', // 'center' | 'side' (Tab alterna)
+  circleSide:   'E',      // lado do centro em relação ao início: E/N/W/S
+  prevMouseScreen:  null,
 };
 
 // ── CANVAS ───────────────────────────────────────────────
@@ -93,6 +97,12 @@ function getAllEndpoints() {
     for (let i = 0; i < verts.length; i++) {
       const v = verts[i];
       pts.push({ x: v.x, y: v.y, segId: seg.id, idx: i });
+    }
+    // Pontos N/L/S/O dos círculos (ímãs para iniciar linhas, arcos, cortes etc.)
+    if (seg.type === 'circle' && state.showCircleQuads) {
+      circleQuadrantPoints(seg).forEach((q, i) => {
+        pts.push({ x: q.x, y: q.y, segId: seg.id, idx: 100 + i, quad: q.side });
+      });
     }
   }
   return pts;
@@ -147,6 +157,49 @@ function segSnapPoints(seg) {
 // Lista {idx, pt} dos vértices editáveis
 function segVertices(seg) {
   return segSnapPoints(seg).map((pt, idx) => ({ idx, pt }));
+}
+
+// ── QUADRANTES DO CÍRCULO (N/L/S/O) ──────────────────────
+const CIRCLE_SIDES = {
+  E: { dx:  1, dy:  0, label: 'Leste', letter: 'L' },
+  N: { dx:  0, dy: -1, label: 'Norte', letter: 'N' },
+  W: { dx: -1, dy:  0, label: 'Oeste', letter: 'O' },
+  S: { dx:  0, dy:  1, label: 'Sul',   letter: 'S' },
+};
+const CIRCLE_SIDE_ORDER = ['E', 'N', 'W', 'S'];
+
+function circleQuadrantPoints(seg) {
+  if (!seg || seg.type !== 'circle' || !seg.points || !seg.points[0]) return [];
+  const c = seg.points[0], r = seg.radius || 0;
+  return CIRCLE_SIDE_ORDER.map(side => ({
+    side,
+    x: c.x + CIRCLE_SIDES[side].dx * r,
+    y: c.y + CIRCLE_SIDES[side].dy * r,
+  }));
+}
+
+function circleQuadrantAtScreen(sx, sy, maxPx = 12) {
+  if (!state.showCircleQuads) return null;
+  let best = null, bestD = maxPx;
+  for (const seg of state.segments) {
+    if (seg.type !== 'circle') continue;
+    for (const q of circleQuadrantPoints(seg)) {
+      const sp = w2s(q.x, q.y);
+      const d  = Math.hypot(sp.x - sx, sp.y - sy);
+      if (d < bestD) { bestD = d; best = { ...q, seg }; }
+    }
+  }
+  return best;
+}
+
+function circleSideFromDelta(dx, dy) {
+  if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? 'E' : 'W';
+  return dy >= 0 ? 'S' : 'N';
+}
+
+function pointOnCircleSide(center, radius, side) {
+  const s = CIRCLE_SIDES[side] || CIRCLE_SIDES.E;
+  return { x: center.x + s.dx * radius, y: center.y + s.dy * radius };
 }
 
 function segLength(seg) {
@@ -441,6 +494,10 @@ function redo() {
 
 // ── SET TOOL ─────────────────────────────────────────────
 function setTool(tool) {
+  if (tool === 'circle' && ui.tool !== 'circle') {
+    ui.circleMode = 'center';
+    ui.circleSide = 'E';
+  }
   ui.tool         = tool;
   ui.lineStart    = null;
   ui.arcPoints    = [];
@@ -503,6 +560,7 @@ function setTool(tool) {
   if (tool === 'trim')   setStatus('Clique no trecho que deseja remover');
   if (tool === 'extend') setStatus('Clique perto da extremidade que deseja estender');
   if (tool === 'vertex-edit') setStatus('Clique no selo "E" (ou Ctrl+clique) para marcar/desmarcar coordenada · Alt+clique remove');
+  if (tool === 'circle') setStatus(circleStatusText());
   render();
 }
 
@@ -532,23 +590,85 @@ function commitLine(p0, p1) {
 }
 
 // ── CÍRCULO ───────────────────────────────────────────────
-function circleClick(wx, wy) {
-  const pt = ui.snapTarget ? { ...ui.snapTarget } : { x: wx, y: wy };
+function circleStatusText() {
+  if (ui.circleMode === 'center') {
+    return 'Círculo: clique no centro · Tab inicia pela borda (4 lados)';
+  }
+  const s = CIRCLE_SIDES[ui.circleSide];
   if (!ui.circleCenter) {
-    ui.circleCenter = { ...pt };
-    setStatus('Centro definido · clique para definir o raio');
+    return `Círculo pela borda · mova o mouse para escolher o lado (centro para ${s.label}) · clique no início · Tab volta ao centro`;
+  }
+  return `Início definido · centro para ${s.label} · clique no lado oposto (diâmetro) · Tab volta ao centro`;
+}
+
+function circleClick(wx, wy, e) {
+  const pt = ui.snapTarget ? { ...ui.snapTarget } : { x: wx, y: wy };
+  const ctrl = !!(e && (e.ctrlKey || e.metaKey));
+
+  // Ctrl+clique: sobre um ponto N/L/S/O de círculo existente, começa ali.
+  if (ctrl) {
+    const q = circleQuadrantAtScreen(ui.mouseScreen.x, ui.mouseScreen.y);
+    if (q) {
+      ui.circleMode = 'side';
+      ui.circleCenter = { x: q.x, y: q.y };
+      ui.circleSide = q.side;
+      setStatus(`Início no ponto ${CIRCLE_SIDES[q.side].label} · mova para escolher o lado e o diâmetro`);
+      render();
+      return;
+    }
+  }
+
+  if (ui.circleMode === 'center') {
+    if (!ui.circleCenter) {
+      ui.circleCenter = { ...pt };
+      setStatus('Centro definido · clique para definir o raio · Tab inicia pela borda');
+      return;
+    }
+    const r = Math.hypot(pt.x-ui.circleCenter.x, pt.y-ui.circleCenter.y);
+    if (r < 0.01) { setStatus('Raio muito pequeno'); return; }
+    saveUndo();
+    state.segments.push({ id: state.nextId++, type: 'circle',
+      points: [{ ...ui.circleCenter }], radius: r, selected: false });
+    ui.circleCenter = null;
+    state.dijkstraPath = [];
+    updatePanelInfo();
+    render();
+    setStatus(`Círculo R${r.toFixed(2)} cm`);
     return;
   }
-  const r = Math.hypot(pt.x-ui.circleCenter.x, pt.y-ui.circleCenter.y);
-  if (r < 0.01) { setStatus('Raio muito pequeno'); return; }
+
+  // Modo "pela borda": 1º clique = início na borda; 2º = lado oposto (diâmetro).
+  if (!ui.circleCenter) {
+    ui.circleCenter = { ...pt };
+    setStatus(circleStatusText());
+    render();
+    return;
+  }
+  const start = ui.circleCenter;
+  const dxs = pt.x - start.x, dys = pt.y - start.y;
+  if (Math.hypot(dxs, dys) > 0.5) ui.circleSide = circleSideFromDelta(dxs, dys);
+  const s = CIRCLE_SIDES[ui.circleSide];
+  const diameter = Math.abs(dxs * s.dx + dys * s.dy);
+  if (diameter < 0.02) { setStatus('Diâmetro muito pequeno'); return; }
+  const r = diameter / 2;
+  const center = pointOnCircleSide(start, r, ui.circleSide);
   saveUndo();
   state.segments.push({ id: state.nextId++, type: 'circle',
-    points: [{ ...ui.circleCenter }], radius: r, selected: false });
+    points: [{ ...center }], radius: r, selected: false,
+    startSide: ui.circleSide, startPoint: { ...start } });
   ui.circleCenter = null;
   state.dijkstraPath = [];
   updatePanelInfo();
   render();
-  setStatus(`Círculo R${r.toFixed(2)} cm`);
+  setStatus(`Círculo Ø${diameter.toFixed(2)} cm (R${r.toFixed(2)} cm) · centro para ${s.label}`);
+}
+
+function toggleCircleMode() {
+  ui.circleMode = ui.circleMode === 'center' ? 'side' : 'center';
+  ui.circleCenter = null;
+  ui.circleSide = 'E';
+  setStatus(circleStatusText());
+  render();
 }
 
 // ── RETÂNGULO ─────────────────────────────────────────────
@@ -2278,6 +2398,7 @@ function render() {
   drawDeadzone(dzViolations);
   drawDeadzoneAlerts(dzViolations);
   drawSegments();
+  drawCircleQuadrants();
   drawVertexHandles();
   drawVertexCoordLeader();
   drawNodes();
@@ -2481,6 +2602,43 @@ function drawEndpoints(seg, sel) {
     ctx.fillStyle = sel ? '#ffffff' : '#4a9eff';
     ctx.fill();
   });
+}
+
+// ── QUADRANTES VISÍVEIS DOS CÍRCULOS (N/L/S/O) ────────────
+function drawCircleQuadrants() {
+  if (!state.showCircleQuads) return;
+  const activeSide = (ui.tool === 'circle' && ui.circleMode === 'side') ? ui.circleSide : null;
+
+  for (const seg of state.segments) {
+    if (seg.type !== 'circle') continue;
+    if (cm2px(seg.radius || 0) < 4) continue;
+    for (const q of circleQuadrantPoints(seg)) {
+      const sp = w2s(q.x, q.y);
+      const active = q.side === activeSide;
+      const rad = active ? 5.5 : 4;
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(sp.x, sp.y - rad);
+      ctx.lineTo(sp.x + rad, sp.y);
+      ctx.lineTo(sp.x, sp.y + rad);
+      ctx.lineTo(sp.x - rad, sp.y);
+      ctx.closePath();
+      ctx.fillStyle   = active ? 'rgba(255,224,102,0.95)' : 'rgba(10,10,12,0.75)';
+      ctx.fill();
+      ctx.strokeStyle = active ? '#ffe066' : 'rgba(255,224,102,0.85)';
+      ctx.lineWidth   = active ? 1.8 : 1.1;
+      ctx.stroke();
+
+      const s = CIRCLE_SIDES[q.side];
+      ctx.font         = '700 9px "JetBrains Mono", ui-monospace, monospace';
+      ctx.fillStyle    = active ? '#ffe066' : 'rgba(255,224,102,0.7)';
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(s.letter, sp.x + s.dx * 11, sp.y + s.dy * 11);
+      ctx.restore();
+    }
+  }
 }
 
 // ── MARCAÇÃO DE COORDENADAS POR VÉRTICE ───────────────────
@@ -2841,22 +2999,12 @@ function drawPreview() {
     ctx.setLineDash([]);
   }
 
-  if (ui.tool === 'circle' && ui.circleCenter) {
-    const c  = ui.circleCenter;
-    const r  = Math.hypot(pt.x-c.x, pt.y-c.y);
-    const sc = w2s(c.x, c.y);
-    const sp = w2s(pt.x, pt.y);
-    ctx.setLineDash([4,4]);
-    ctx.strokeStyle = 'rgba(74,158,255,0.6)';
-    ctx.lineWidth   = 1.5;
-    ctx.beginPath(); ctx.arc(sc.x, sc.y, cm2px(r), 0, Math.PI*2); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(sc.x, sc.y); ctx.lineTo(sp.x, sp.y); ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.font = '10px JetBrains Mono, monospace';
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'bottom';
-    ctx.fillText(`R ${r.toFixed(2)}cm`, (sc.x+sp.x)/2, (sc.y+sp.y)/2 - 6);
+  if (ui.tool === 'circle') {
+    if (ui.circleMode === 'side' && !ui.circleCenter) {
+      drawCircleCompass(ui.mouseScreen.x, ui.mouseScreen.y);
+    } else if (ui.circleCenter) {
+      drawCircleInProgress(pt);
+    }
   }
 
   if (ui.tool === 'rect' && ui.rectStart) {
@@ -2879,6 +3027,102 @@ function drawPreview() {
   if (ui.tool === 'mirror' && ui.mirrorPts.length === 1) {
     drawDashedLine(ui.mirrorPts[0], pt, 'rgba(232,0,61,0.6)');
   }
+}
+
+function drawCircleCompass(sx, sy) {
+  const R = 24;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,224,102,0.22)';
+  ctx.lineWidth   = 1;
+  ctx.setLineDash([3,3]);
+  ctx.beginPath(); ctx.arc(sx, sy, R, 0, Math.PI*2); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(sx-R, sy); ctx.lineTo(sx+R, sy);
+  ctx.moveTo(sx, sy-R); ctx.lineTo(sx, sy+R);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  for (const side of CIRCLE_SIDE_ORDER) {
+    const s = CIRCLE_SIDES[side];
+    const active = side === ui.circleSide;
+    const x = sx + s.dx * (R + 11);
+    const y = sy + s.dy * (R + 11);
+    ctx.beginPath();
+    ctx.arc(x, y, active ? 9 : 7, 0, Math.PI*2);
+    ctx.fillStyle   = active ? 'rgba(255,224,102,0.95)' : 'rgba(10,10,12,0.8)';
+    ctx.fill();
+    ctx.strokeStyle = active ? '#ffe066' : 'rgba(255,224,102,0.5)';
+    ctx.lineWidth   = active ? 1.8 : 1;
+    ctx.stroke();
+    ctx.font         = '700 9px "JetBrains Mono", ui-monospace, monospace';
+    ctx.fillStyle    = active ? '#0a0a0c' : 'rgba(255,224,102,0.8)';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(s.letter, x, y + 0.5);
+  }
+  ctx.restore();
+}
+
+function drawCircleInProgress(pt) {
+  const start = ui.circleCenter;
+  let center, r, diameter = 0, far = null;
+
+  if (ui.circleMode === 'side') {
+    const s = CIRCLE_SIDES[ui.circleSide];
+    diameter = Math.abs((pt.x - start.x) * s.dx + (pt.y - start.y) * s.dy);
+    r = diameter / 2;
+    if (r < 0.001) return;
+    center = pointOnCircleSide(start, r, ui.circleSide);
+    far    = pointOnCircleSide(start, diameter, ui.circleSide);
+  } else {
+    center = start;
+    r = Math.hypot(pt.x - center.x, pt.y - center.y);
+    if (r < 0.001) return;
+  }
+
+  const sc = w2s(center.x, center.y);
+  const ss = w2s(start.x, start.y);
+
+  ctx.save();
+  ctx.setLineDash([4,4]);
+  ctx.strokeStyle = 'rgba(74,158,255,0.6)';
+  ctx.lineWidth   = 1.5;
+  ctx.beginPath(); ctx.arc(sc.x, sc.y, cm2px(r), 0, Math.PI*2); ctx.stroke();
+
+  if (ui.circleMode === 'side' && far) {
+    const sf = w2s(far.x, far.y);
+    // diâmetro e centro
+    ctx.strokeStyle = 'rgba(255,224,102,0.8)';
+    ctx.beginPath(); ctx.moveTo(ss.x, ss.y); ctx.lineTo(sf.x, sf.y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(sc.x-5, sc.y); ctx.lineTo(sc.x+5, sc.y);
+    ctx.moveTo(sc.x, sc.y-5); ctx.lineTo(sc.x, sc.y+5);
+    ctx.stroke();
+    // início (verde) e lado oposto (amarelo)
+    for (const [sp, color] of [[ss, '#00ff87'], [sf, '#ffe066']]) {
+      ctx.beginPath(); ctx.arc(sp.x, sp.y, 4, 0, Math.PI*2);
+      ctx.fillStyle = color; ctx.fill();
+    }
+    ctx.font         = '600 10px "JetBrains Mono", ui-monospace, monospace';
+    ctx.fillStyle    = 'rgba(255,255,255,0.7)';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'bottom';
+    const mx = (ss.x + sf.x) / 2;
+    const my = (ss.y + sf.y) / 2 - 8;
+    ctx.fillText(`Ø ${diameter.toFixed(2)}cm · centro ${CIRCLE_SIDES[ui.circleSide].label}`, mx, my);
+  } else {
+    const sp = w2s(pt.x, pt.y);
+    ctx.beginPath(); ctx.moveTo(sc.x, sc.y); ctx.lineTo(sp.x, sp.y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.font         = '10px "JetBrains Mono", ui-monospace, monospace';
+    ctx.fillStyle    = 'rgba(255,255,255,0.55)';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText(`R ${r.toFixed(2)}cm`, (sc.x+sp.x)/2, (sc.y+sp.y)/2 - 6);
+  }
+  ctx.restore();
 }
 
 function drawDashedLine(a, b, color) {
@@ -2998,7 +3242,7 @@ function onMouseDown(e) {
     case 'select':      handleSelectDown(sx, sy, e); break;
     case 'line':        lineClick(wp.x, wp.y);        break;
     case 'arc':         arcClick(wp.x, wp.y);         break;
-    case 'circle':      circleClick(wp.x, wp.y);      break;
+    case 'circle':      circleClick(wp.x, wp.y, e);   break;
     case 'rect':        rectClick(wp.x, wp.y);        break;
     case 'polyline':    polyClick(wp.x, wp.y);        break;
     case 'fillet':      filletClick(wp.x, wp.y);      break;
@@ -3027,6 +3271,21 @@ function onMouseMove(e) {
 
   // Snap magnético (ignora o próprio vértice que está sendo arrastado)
   ui.snapTarget = getMagneticSnap(sx, sy, ui.dragVertex);
+
+  // Escolha do lado (N/L/S/O) no modo "pela borda" do círculo
+  const prevScreen = ui.prevMouseScreen;
+  ui.prevMouseScreen = { x: sx, y: sy };
+  if (ui.tool === 'circle' && ui.circleMode === 'side') {
+    if (!ui.circleCenter) {
+      if (prevScreen) {
+        const dx = sx - prevScreen.x, dy = sy - prevScreen.y;
+        if (Math.hypot(dx, dy) >= 3) ui.circleSide = circleSideFromDelta(dx, dy);
+      }
+    } else {
+      const dx = wp.x - ui.circleCenter.x, dy = wp.y - ui.circleCenter.y;
+      if (Math.hypot(dx, dy) > 0.5) ui.circleSide = circleSideFromDelta(dx, dy);
+    }
+  }
 
   // Arrasto de vértice (Editar Vértice)
   if (ui.dragVertex) {
@@ -3201,6 +3460,13 @@ function onKeyDown(e) {
 
   if (inInput) return;
 
+  // Tab na ferramenta Círculo alterna entre iniciar pelo centro e pela borda (4 lados)
+  if (e.key === 'Tab' && ui.tool === 'circle' && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault();
+    toggleCircleMode();
+    return;
+  }
+
   const ctrl = e.ctrlKey || e.metaKey;
 
   // Enter finaliza construções no canvas
@@ -3279,6 +3545,8 @@ function cancelCurrentTool() {
   ui.polyPoints   = [];
   ui.rectStart    = null;
   ui.circleCenter = null;
+  ui.circleMode   = 'center';
+  ui.circleSide   = 'E';
   ui.mirrorPts    = [];
   ui.dragVertex   = null;
   ui.offsetTargetId = null;
@@ -3467,6 +3735,7 @@ function saveJSON() {
     dijkstraMode: state.dijkstraMode,
     orthoLock:    state.orthoLock,
     showVertexCoords: state.showVertexCoords,
+    showCircleQuads:  state.showCircleQuads,
   }, null, 2);
   const a = document.createElement('a');
   a.href     = URL.createObjectURL(new Blob([data],{type:'application/json'}));
@@ -3510,6 +3779,11 @@ function loadJSON(file) {
         state.showVertexCoords = d.showVertexCoords;
         const vcEl = document.getElementById('exp-vertex-coords');
         if (vcEl) vcEl.checked = d.showVertexCoords;
+      }
+      if (typeof d.showCircleQuads === 'boolean') {
+        state.showCircleQuads = d.showCircleQuads;
+        const cqEl = document.getElementById('circle-quads-toggle');
+        if (cqEl) cqEl.checked = d.showCircleQuads;
       }
       // Normaliza a marcação de coordenadas de cada vértice.
       // Ausente = cinza (ignorado); true = marcado.
@@ -3895,6 +4169,10 @@ document.getElementById('btn-dijkstra').addEventListener('click', runTrackAnalys
 document.getElementById('btn-export-pdf').addEventListener('click', exportPDF);
 document.getElementById('exp-vertex-coords').addEventListener('change', e => {
   state.showVertexCoords = e.target.checked;
+  render();
+});
+document.getElementById('circle-quads-toggle').addEventListener('change', e => {
+  state.showCircleQuads = e.target.checked;
   render();
 });
 document.getElementById('btn-coord-all').addEventListener('click', () => {
