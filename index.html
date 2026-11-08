@@ -269,6 +269,40 @@
       <div class="hud-hint">Clique no vértice para aplicar · Esc cancela</div>
     </div>
 
+    <!-- HUD Círculo -->
+    <div id="circle-hud" class="hud-panel hidden">
+      <div class="hud-title">CÍRCULO</div>
+      <div class="hud-row">
+        <span class="hud-label">Modo</span>
+        <span id="circle-hud-mode" class="hud-val">Centro</span>
+      </div>
+      <div class="hud-row" style="margin-top:6px">
+        <span class="hud-label">Raio (R)</span>
+        <span id="circle-hud-radius" class="hud-val">—</span>
+      </div>
+      <div class="hud-row" style="margin-top:6px">
+        <span class="hud-label">Diâmetro (Ø)</span>
+        <span id="circle-hud-diameter" class="hud-val">—</span>
+      </div>
+      <div id="circle-hud-center-group" class="hud-group">
+        <div class="hud-row" style="margin-top:6px">
+          <span class="hud-label">Centro X</span>
+          <span id="circle-hud-cx" class="hud-val">—</span>
+        </div>
+        <div class="hud-row">
+          <span class="hud-label">Centro Y</span>
+          <span id="circle-hud-cy" class="hud-val">—</span>
+        </div>
+      </div>
+      <div id="circle-hud-side-group" class="hud-group">
+        <div class="hud-row" style="margin-top:6px">
+          <span class="hud-label">Lado</span>
+          <span id="circle-hud-side" class="hud-val">—</span>
+        </div>
+      </div>
+      <div class="hud-hint">Tab: alternar modo · Ctrl+clique: mudar lado/início</div>
+    </div>
+
     <!-- HUD Mover Precisão -->
     <div id="move-hud" class="hud-panel hidden">
       <div class="hud-title">MOVER COM PRECISÃO</div>
@@ -456,6 +490,10 @@
               <input type="number" id="sel-resize-val" class="prop-input" step="0.1" />
               <button id="sel-resize-apply" class="prop-btn">✓</button>
             </div>
+          </div>
+          <div class="prop-row prop-check" style="margin-top:8px">
+            <input type="checkbox" id="sel-construction" />
+            <label for="sel-construction" class="prop-label">Linha de Construção</label>
           </div>
         </div>
       </div>

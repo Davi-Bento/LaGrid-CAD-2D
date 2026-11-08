@@ -515,6 +515,7 @@ function setTool(tool) {
   hideRotateHud();
   hideScaleHud();
   hideArrayHud();
+  hideCircleHud();
 
   canvas.className = '';
   if (tool === 'select')     canvas.classList.add('cursor-select');
@@ -530,6 +531,7 @@ function setTool(tool) {
   if (tool === 'rotate') showRotateHud();
   if (tool === 'scale')  showScaleHud();
   if (tool === 'array')  showArrayHud();
+  if (tool === 'circle') showCircleHud();
 
   const labels = {
     select:       'SELECIONAR',
@@ -583,7 +585,7 @@ function commitLine(p0, p1) {
   if (Math.hypot(p1.x-p0.x, p1.y-p0.y) < 0.01) return;
   saveUndo();
   state.segments.push({ id: state.nextId++, type: 'line',
-    points: [{ ...p0 }, { ...p1 }], selected: false });
+    points: [{ ...p0 }, { ...p1 }], selected: false, isConstruction: false });
   state.dijkstraPath = [];
   updatePanelInfo();
   render();
@@ -614,6 +616,7 @@ function circleClick(wx, wy, e) {
       ui.circleSide = q.side;
       setStatus(`Início no ponto ${CIRCLE_SIDES[q.side].label} · mova para escolher o lado e o diâmetro`);
       render();
+      updateCircleHud();
       return;
     }
   }
@@ -622,6 +625,7 @@ function circleClick(wx, wy, e) {
     if (!ui.circleCenter) {
       ui.circleCenter = { ...pt };
       setStatus('Centro definido · clique para definir o raio · Tab inicia pela borda');
+      updateCircleHud();
       return;
     }
     const r = Math.hypot(pt.x-ui.circleCenter.x, pt.y-ui.circleCenter.y);
@@ -634,6 +638,7 @@ function circleClick(wx, wy, e) {
     updatePanelInfo();
     render();
     setStatus(`Círculo R${r.toFixed(2)} cm`);
+    updateCircleHud();
     return;
   }
 
@@ -642,6 +647,7 @@ function circleClick(wx, wy, e) {
     ui.circleCenter = { ...pt };
     setStatus(circleStatusText());
     render();
+    updateCircleHud();
     return;
   }
   const start = ui.circleCenter;
@@ -661,6 +667,7 @@ function circleClick(wx, wy, e) {
   updatePanelInfo();
   render();
   setStatus(`Círculo Ø${diameter.toFixed(2)} cm (R${r.toFixed(2)} cm) · centro para ${s.label}`);
+  updateCircleHud();
 }
 
 function toggleCircleMode() {
@@ -669,6 +676,7 @@ function toggleCircleMode() {
   ui.circleSide = 'E';
   setStatus(circleStatusText());
   render();
+  updateCircleHud();
 }
 
 // ── RETÂNGULO ─────────────────────────────────────────────
@@ -2503,6 +2511,23 @@ function drawSegments() {
     const inPath = state.dijkstraPath.includes(seg.id);
     const sel    = ui.selection.has(seg.id);
     const baseW  = Math.max(0.5, 1.5 * cam.scale);
+    const isConstruction = seg.type === 'line' && seg.isConstruction;
+
+    // Linha de construção — estilo próprio, não entra na faixa de largura
+    if (isConstruction) {
+      ctx.save();
+      ctx.strokeStyle = sel ? '#ff00ff' : '#ff00ffcc'; // magenta
+      ctx.lineWidth   = Math.max(0.5, 0.75 * cam.scale);
+      ctx.lineCap     = 'round';
+      ctx.lineJoin    = 'round';
+      ctx.setLineDash([8 * cam.scale, 8 * cam.scale]);
+      strokeSegPath(seg);
+      ctx.setLineDash([]);
+      ctx.restore();
+      // Endpoints magnéticos para snap
+      drawEndpoints(seg, sel);
+      continue;
+    }
 
     // Faixa de largura (visualização da largura real da linha)
     if (lineWidthPx > 2) {
@@ -3311,6 +3336,9 @@ function onMouseMove(e) {
   document.getElementById('coord-x').textContent = display.x.toFixed(2);
   document.getElementById('coord-y').textContent = display.y.toFixed(2);
 
+  // Atualiza HUD do círculo em tempo real
+  if (ui.tool === 'circle') updateCircleHud();
+
   // Status bar coordinate display
   const coordEl = document.getElementById('status-coord');
   if (coordEl) {
@@ -3558,6 +3586,7 @@ function cancelCurrentTool() {
   hideRotateHud();
   hideScaleHud();
   hideArrayHud();
+  hideCircleHud();
   ui.selection.clear();
   updateSelectionPanel();
   setTool('select');
@@ -3583,6 +3612,59 @@ function updatePolarHudOrigin(pt) {
 
 function hidePolarHud() {
   document.getElementById('polar-hud').classList.add('hidden');
+}
+
+// ── HUD CÍRCULO ─────────────────────────────────────────────
+function showCircleHud() {
+  document.getElementById('circle-hud').classList.remove('hidden');
+}
+
+function hideCircleHud() {
+  document.getElementById('circle-hud').classList.add('hidden');
+}
+
+function updateCircleHud() {
+  if (ui.circleMode === 'center') {
+    document.getElementById('circle-hud-mode').textContent = 'Centro';
+    document.getElementById('circle-hud-center-group').style.display = 'block';
+    document.getElementById('circle-hud-side-group').style.display = 'none';
+    if (ui.circleCenter) {
+      const r = Math.hypot(ui.mouseWorld.x - ui.circleCenter.x, ui.mouseWorld.y - ui.circleCenter.y);
+      document.getElementById('circle-hud-radius').textContent = r.toFixed(2) + ' cm';
+      document.getElementById('circle-hud-diameter').textContent = (r * 2).toFixed(2) + ' cm';
+      document.getElementById('circle-hud-cx').textContent = ui.circleCenter.x.toFixed(2) + ' cm';
+      document.getElementById('circle-hud-cy').textContent = ui.circleCenter.y.toFixed(2) + ' cm';
+    } else {
+      document.getElementById('circle-hud-radius').textContent = '—';
+      document.getElementById('circle-hud-diameter').textContent = '—';
+      document.getElementById('circle-hud-cx').textContent = '—';
+      document.getElementById('circle-hud-cy').textContent = '—';
+    }
+  } else {
+    document.getElementById('circle-hud-mode').textContent = '4 Lados';
+    document.getElementById('circle-hud-center-group').style.display = 'none';
+    document.getElementById('circle-hud-side-group').style.display = 'block';
+    if (ui.circleCenter) {
+      const start = ui.circleCenter;
+      const pt = ui.mouseWorld;
+      const s = CIRCLE_SIDES[ui.circleSide];
+      const diameter = Math.abs((pt.x - start.x) * s.dx + (pt.y - start.y) * s.dy);
+      const r = diameter / 2;
+      const center = pointOnCircleSide(start, r, ui.circleSide);
+      document.getElementById('circle-hud-radius').textContent = r.toFixed(2) + ' cm';
+      document.getElementById('circle-hud-diameter').textContent = diameter.toFixed(2) + ' cm';
+      document.getElementById('circle-hud-side').textContent = CIRCLE_SIDES[ui.circleSide].label;
+      document.getElementById('circle-hud-cx').textContent = center.x.toFixed(2) + ' cm';
+      document.getElementById('circle-hud-cy').textContent = center.y.toFixed(2) + ' cm';
+      document.getElementById('circle-hud-center-group').style.display = 'block';
+    } else {
+      document.getElementById('circle-hud-radius').textContent = '—';
+      document.getElementById('circle-hud-diameter').textContent = '—';
+      document.getElementById('circle-hud-side').textContent = '—';
+      document.getElementById('circle-hud-cx').textContent = '—';
+      document.getElementById('circle-hud-cy').textContent = '—';
+    }
+  }
 }
 
 function commitPolarHud() {
@@ -3634,6 +3716,10 @@ function updateSelectionPanel() {
     document.getElementById('sel-len').textContent  = segLength(s).toFixed(3)+' cm';
     document.getElementById('sel-resize-val').value = segLength(s).toFixed(2);
     document.getElementById('sel-line-controls').style.display = s.type==='line'?'block':'none';
+    if (s.type === 'line') {
+      const cb = document.getElementById('sel-construction');
+      cb.checked = !!s.isConstruction;
+    }
   } else {
     document.getElementById('sel-type').textContent = `${segs.length} segmentos`;
     document.getElementById('sel-len').textContent  =
@@ -3669,6 +3755,18 @@ document.getElementById('sel-resize-apply').addEventListener('click', () => {
   updateSelectionPanel();
   render();
   toast('Comprimento atualizado');
+});
+
+// ── LINHA DE CONSTRUÇÃO ──────────────────────────────────────
+document.getElementById('sel-construction').addEventListener('change', e => {
+  const ids = [...ui.selection];
+  if (ids.length !== 1) return;
+  const seg = state.segments.find(s => s.id === ids[0]);
+  if (!seg || seg.type !== 'line') return;
+  saveUndo();
+  seg.isConstruction = e.target.checked;
+  render();
+  toast(seg.isConstruction ? 'Linha marcada como construção' : 'Linha normal');
 });
 
 // ── ÁREA DE TRABALHO ──────────────────────────────────────
@@ -3723,7 +3821,7 @@ document.getElementById('line-width-input').addEventListener('change', () => {
 // ── SAVE / LOAD ───────────────────────────────────────────
 function saveJSON() {
   const data = JSON.stringify({
-    version:   7,
+    version:   8,
     segments:  state.segments,
     nodes:     state.nodes,
     nextId:    state.nextId,
@@ -3913,6 +4011,9 @@ function exportPDF() {
 
   let paths = '';
   for (const seg of state.segments) {
+    // Pular linhas de construção na exportação
+    if (seg.type === 'line' && seg.isConstruction) continue;
+    
     const inPath = state.dijkstraPath.includes(seg.id);
     const color  = inPath ? dijkColor : pathColor;
     const sw     = Math.max(0.5, state.lineWidth * drawScale * CM2SVG);
