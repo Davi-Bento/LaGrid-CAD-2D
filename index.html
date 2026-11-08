@@ -273,34 +273,54 @@
     <div id="circle-hud" class="hud-panel hidden">
       <div class="hud-title">CÍRCULO</div>
       <div class="hud-row">
-        <span class="hud-label">Modo</span>
-        <span id="circle-hud-mode" class="hud-val">Centro</span>
+        <label class="hud-label" for="circle-mode-select">Modo</label>
+        <select id="circle-mode-select" class="hud-input">
+          <option value="center">Centro</option>
+          <option value="side">4 Lados</option>
+        </select>
       </div>
-      <div class="hud-row" style="margin-top:6px">
-        <span class="hud-label">Raio (R)</span>
-        <span id="circle-hud-radius" class="hud-val">—</span>
-      </div>
-      <div class="hud-row" style="margin-top:6px">
-        <span class="hud-label">Diâmetro (Ø)</span>
-        <span id="circle-hud-diameter" class="hud-val">—</span>
-      </div>
-      <div id="circle-hud-center-group" class="hud-group">
+      <div id="circle-hud-center-fields">
         <div class="hud-row" style="margin-top:6px">
-          <span class="hud-label">Centro X</span>
-          <span id="circle-hud-cx" class="hud-val">—</span>
+          <label class="hud-label" for="circle-radius-input">Raio (cm)</label>
+          <input type="number" id="circle-radius-input" class="hud-input" step="0.1" min="0.01" placeholder="0.0" />
         </div>
-        <div class="hud-row">
-          <span class="hud-label">Centro Y</span>
-          <span id="circle-hud-cy" class="hud-val">—</span>
-        </div>
-      </div>
-      <div id="circle-hud-side-group" class="hud-group">
         <div class="hud-row" style="margin-top:6px">
-          <span class="hud-label">Lado</span>
-          <span id="circle-hud-side" class="hud-val">—</span>
+          <label class="hud-label" for="circle-cx-input">Centro X (cm)</label>
+          <input type="number" id="circle-cx-input" class="hud-input" step="0.1" placeholder="0.0" />
+        </div>
+        <div class="hud-row" style="margin-top:6px">
+          <label class="hud-label" for="circle-cy-input">Centro Y (cm)</label>
+          <input type="number" id="circle-cy-input" class="hud-input" step="0.1" placeholder="0.0" />
         </div>
       </div>
-      <div class="hud-hint">Tab: alternar modo · Ctrl+clique: mudar lado/início</div>
+      <div id="circle-hud-side-fields" style="display:none;">
+        <div class="hud-row" style="margin-top:6px">
+          <label class="hud-label" for="circle-diameter-input">Diâmetro (cm)</label>
+          <input type="number" id="circle-diameter-input" class="hud-input" step="0.1" min="0.01" placeholder="0.0" />
+        </div>
+        <div class="hud-row" style="margin-top:6px">
+          <label class="hud-label" for="circle-start-x-input">Início X (cm)</label>
+          <input type="number" id="circle-start-x-input" class="hud-input" step="0.1" placeholder="0.0" />
+        </div>
+        <div class="hud-row" style="margin-top:6px">
+          <label class="hud-label" for="circle-start-y-input">Início Y (cm)</label>
+          <input type="number" id="circle-start-y-input" class="hud-input" step="0.1" placeholder="0.0" />
+        </div>
+        <div class="hud-row" style="margin-top:6px">
+          <label class="hud-label" for="circle-side-select">Lado do Centro</label>
+          <select id="circle-side-select" class="hud-input">
+            <option value="E">Leste (→)</option>
+            <option value="N">Norte (↑)</option>
+            <option value="W">Oeste (←)</option>
+            <option value="S">Sul (↓)</option>
+          </select>
+        </div>
+      </div>
+      <div class="hud-actions">
+        <button id="circle-cancel-btn" class="hud-btn">Esc</button>
+        <button id="circle-confirm-btn" class="hud-btn primary">Enter ↵</button>
+      </div>
+      <div class="hud-hint">Tab: alternar modo · Preencha e Enter para criar · ou clique no canvas</div>
     </div>
 
     <!-- HUD Mover Precisão -->

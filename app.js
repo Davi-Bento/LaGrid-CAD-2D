@@ -3459,6 +3459,14 @@ function onKeyDown(e) {
     return;
   }
 
+  // Tab na ferramenta Círculo alterna entre iniciar pelo centro e pela borda (4 lados)
+  // Funciona mesmo com HUD aberto (antes do early return de inInput)
+  if (e.key === 'Tab' && ui.tool === 'circle' && !e.ctrlKey && !e.metaKey) {
+    e.preventDefault();
+    toggleCircleMode();
+    return;
+  }
+
   // Enter nos HUDs
   if (e.key === 'Enter' && inInput) {
     e.preventDefault();
@@ -3476,6 +3484,9 @@ function onKeyDown(e) {
     }
     if (!document.getElementById('scale-hud').classList.contains('hidden')) {
       applyScale();
+    }
+    if (!document.getElementById('circle-hud').classList.contains('hidden')) {
+      commitCircleHud();
     }
     if (!document.getElementById('array-hud').classList.contains('hidden')) {
       applyArray();
@@ -3617,6 +3628,14 @@ function hidePolarHud() {
 // ── HUD CÍRCULO ─────────────────────────────────────────────
 function showCircleHud() {
   document.getElementById('circle-hud').classList.remove('hidden');
+  // Preenche Centro X/Y com posição atual do mouse se não há centro definido
+  if (!ui.circleCenter) {
+    document.getElementById('circle-cx-input').value = ui.mouseWorld.x.toFixed(2);
+    document.getElementById('circle-cy-input').value = ui.mouseWorld.y.toFixed(2);
+    document.getElementById('circle-start-x-input').value = ui.mouseWorld.x.toFixed(2);
+    document.getElementById('circle-start-y-input').value = ui.mouseWorld.y.toFixed(2);
+  }
+  // NÃO foca automaticamente para permitir Tab para alternar modo
 }
 
 function hideCircleHud() {
@@ -3624,26 +3643,28 @@ function hideCircleHud() {
 }
 
 function updateCircleHud() {
+  const modeSel = document.getElementById('circle-mode-select');
+  if (modeSel) modeSel.value = ui.circleMode;
+
+  const centerFields = document.getElementById('circle-hud-center-fields');
+  const sideFields = document.getElementById('circle-hud-side-fields');
   if (ui.circleMode === 'center') {
-    document.getElementById('circle-hud-mode').textContent = 'Centro';
-    document.getElementById('circle-hud-center-group').style.display = 'block';
-    document.getElementById('circle-hud-side-group').style.display = 'none';
+    if (centerFields) centerFields.style.display = 'block';
+    if (sideFields) sideFields.style.display = 'none';
     if (ui.circleCenter) {
       const r = Math.hypot(ui.mouseWorld.x - ui.circleCenter.x, ui.mouseWorld.y - ui.circleCenter.y);
-      document.getElementById('circle-hud-radius').textContent = r.toFixed(2) + ' cm';
-      document.getElementById('circle-hud-diameter').textContent = (r * 2).toFixed(2) + ' cm';
-      document.getElementById('circle-hud-cx').textContent = ui.circleCenter.x.toFixed(2) + ' cm';
-      document.getElementById('circle-hud-cy').textContent = ui.circleCenter.y.toFixed(2) + ' cm';
-    } else {
-      document.getElementById('circle-hud-radius').textContent = '—';
-      document.getElementById('circle-hud-diameter').textContent = '—';
-      document.getElementById('circle-hud-cx').textContent = '—';
-      document.getElementById('circle-hud-cy').textContent = '—';
+      const rIn = document.getElementById('circle-radius-input');
+      if (rIn && document.activeElement !== rIn) rIn.value = r.toFixed(2);
+      const cxIn = document.getElementById('circle-cx-input');
+      if (cxIn && document.activeElement !== cxIn) cxIn.value = ui.circleCenter.x.toFixed(2);
+      const cyIn = document.getElementById('circle-cy-input');
+      if (cyIn && document.activeElement !== cyIn) cyIn.value = ui.circleCenter.y.toFixed(2);
     }
   } else {
-    document.getElementById('circle-hud-mode').textContent = '4 Lados';
-    document.getElementById('circle-hud-center-group').style.display = 'none';
-    document.getElementById('circle-hud-side-group').style.display = 'block';
+    if (centerFields) centerFields.style.display = 'none';
+    if (sideFields) sideFields.style.display = 'block';
+    const sideSel = document.getElementById('circle-side-select');
+    if (sideSel && document.activeElement !== sideSel) sideSel.value = ui.circleSide;
     if (ui.circleCenter) {
       const start = ui.circleCenter;
       const pt = ui.mouseWorld;
@@ -3651,19 +3672,54 @@ function updateCircleHud() {
       const diameter = Math.abs((pt.x - start.x) * s.dx + (pt.y - start.y) * s.dy);
       const r = diameter / 2;
       const center = pointOnCircleSide(start, r, ui.circleSide);
-      document.getElementById('circle-hud-radius').textContent = r.toFixed(2) + ' cm';
-      document.getElementById('circle-hud-diameter').textContent = diameter.toFixed(2) + ' cm';
-      document.getElementById('circle-hud-side').textContent = CIRCLE_SIDES[ui.circleSide].label;
-      document.getElementById('circle-hud-cx').textContent = center.x.toFixed(2) + ' cm';
-      document.getElementById('circle-hud-cy').textContent = center.y.toFixed(2) + ' cm';
-      document.getElementById('circle-hud-center-group').style.display = 'block';
-    } else {
-      document.getElementById('circle-hud-radius').textContent = '—';
-      document.getElementById('circle-hud-diameter').textContent = '—';
-      document.getElementById('circle-hud-side').textContent = '—';
-      document.getElementById('circle-hud-cx').textContent = '—';
-      document.getElementById('circle-hud-cy').textContent = '—';
+      const dIn = document.getElementById('circle-diameter-input');
+      if (dIn && document.activeElement !== dIn) dIn.value = diameter.toFixed(2);
+      const sxIn = document.getElementById('circle-start-x-input');
+      if (sxIn && document.activeElement !== sxIn) sxIn.value = start.x.toFixed(2);
+      const syIn = document.getElementById('circle-start-y-input');
+      if (syIn && document.activeElement !== syIn) syIn.value = start.y.toFixed(2);
     }
+  }
+}
+
+function commitCircleHud() {
+  const mode = document.getElementById('circle-mode-select').value;
+  if (mode === 'center') {
+    const r = parseFloat(document.getElementById('circle-radius-input').value);
+    const cx = parseFloat(document.getElementById('circle-cx-input').value);
+    const cy = parseFloat(document.getElementById('circle-cy-input').value);
+    if (isNaN(r) || r <= 0) { toast('Raio inválido', 'warn'); return; }
+    if (isNaN(cx) || isNaN(cy)) { toast('Coordenadas do centro inválidas', 'warn'); return; }
+    saveUndo();
+    state.segments.push({ id: state.nextId++, type: 'circle',
+      points: [{ x: cx, y: cy }], radius: r, selected: false });
+    state.dijkstraPath = [];
+    updatePanelInfo();
+    render();
+    toast(`Círculo R${r.toFixed(2)} cm em (${cx.toFixed(2)}, ${cy.toFixed(2)})`);
+    // Prepara para próximo círculo
+    document.getElementById('circle-radius-input').value = '';
+    document.getElementById('circle-radius-input').focus();
+  } else {
+    const diameter = parseFloat(document.getElementById('circle-diameter-input').value);
+    const sx = parseFloat(document.getElementById('circle-start-x-input').value);
+    const sy = parseFloat(document.getElementById('circle-start-y-input').value);
+    const side = document.getElementById('circle-side-select').value;
+    if (isNaN(diameter) || diameter <= 0) { toast('Diâmetro inválido', 'warn'); return; }
+    if (isNaN(sx) || isNaN(sy)) { toast('Coordenadas de início inválidas', 'warn'); return; }
+    const start = { x: sx, y: sy };
+    const r = diameter / 2;
+    const center = pointOnCircleSide(start, r, side);
+    saveUndo();
+    state.segments.push({ id: state.nextId++, type: 'circle',
+      points: [{ ...center }], radius: r, selected: false,
+      startSide: side, startPoint: { ...start } });
+    state.dijkstraPath = [];
+    updatePanelInfo();
+    render();
+    toast(`Círculo Ø${diameter.toFixed(2)} cm (R${r.toFixed(2)} cm) · centro para ${CIRCLE_SIDES[side].label}`);
+    document.getElementById('circle-diameter-input').value = '';
+    document.getElementById('circle-diameter-input').focus();
   }
 }
 
@@ -4313,6 +4369,23 @@ document.getElementById('polar-cancel-btn').addEventListener('click', () => {
   setTool('select');
 });
 
+// HUD círculo botões
+document.getElementById('circle-confirm-btn').addEventListener('click', commitCircleHud);
+document.getElementById('circle-cancel-btn').addEventListener('click', () => {
+  ui.circleCenter = null;
+  ui.circleMode = 'center';
+  ui.circleSide = 'E';
+  hideCircleHud();
+  setTool('select');
+});
+document.getElementById('circle-mode-select').addEventListener('change', e => {
+  ui.circleMode = e.target.value;
+  ui.circleCenter = null;
+  ui.circleSide = 'E';
+  updateCircleHud();
+  render();
+});
+
 // HUD move botões
 document.getElementById('move-confirm-btn').addEventListener('click', applyPrecisionMove);
 document.getElementById('move-cancel-btn').addEventListener('click', () => {
@@ -4381,6 +4454,19 @@ document.getElementById('move-angle-input').addEventListener('keydown', e => {
     e.preventDefault();
     document.getElementById('move-dist-input').focus();
   }
+});
+
+// Circle HUD - Enter/Escape e Tab entre campos
+['circle-radius-input', 'circle-cx-input', 'circle-cy-input',
+ 'circle-diameter-input', 'circle-start-x-input', 'circle-start-y-input'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); commitCircleHud(); }
+    if (e.key === 'Escape') { hideCircleHud(); setTool('select'); }
+  });
+});
+document.getElementById('circle-mode-select').addEventListener('keydown', e => {
+  if (e.key === 'Escape') { hideCircleHud(); setTool('select'); }
 });
 
 // ── STATUS ────────────────────────────────────────────────
