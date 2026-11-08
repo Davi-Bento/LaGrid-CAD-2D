@@ -376,10 +376,12 @@
       <span id="status-tool">SELECIONAR</span>
       <span id="status-msg">Pronto — use os atalhos para desenhar</span>
       <span id="status-sel"></span>
+      <span id="status-coord" class="status-coord">X: 0.00 cm  Y: 0.00 cm</span>
       <div id="status-right">
         <button id="btn-toggle-grid" class="status-toggle active" title="G">GRADE</button>
         <button id="btn-toggle-snap" class="status-toggle active" title="S">SNAP</button>
         <button id="btn-toggle-angle" class="status-toggle" title="Snap angular (passo configurável)">ANG</button>
+        <button id="btn-toggle-ortho" class="status-toggle" title="Ortho Lock (F8)">ORTHO</button>
       </div>
     </div>
   </main>
@@ -392,13 +394,18 @@
       <div class="panel-title">Área de Trabalho</div>
       <div class="prop-row">
         <label class="prop-label">Largura (cm)</label>
-        <input type="number" id="workspace-w" class="prop-input" value="200" step="10" min="10" />
+        <input type="number" id="workspace-w" class="prop-input" value="285" step="10" min="10" />
       </div>
       <div class="prop-row">
         <label class="prop-label">Altura (cm)</label>
-        <input type="number" id="workspace-h" class="prop-input" value="150" step="10" min="10" />
+        <input type="number" id="workspace-h" class="prop-input" value="180" step="10" min="10" />
+      </div>
+      <div class="prop-row">
+        <label class="prop-label">Deadzone (cm)</label>
+        <input type="number" id="deadzone-input" class="prop-input" value="30" step="1" min="0" />
       </div>
       <button id="btn-apply-workspace" class="panel-btn" style="margin-top:4px">Aplicar</button>
+      <div class="hud-hint" style="margin-top:4px;font-size:10px">Margem de alerta até a borda (não bloqueia)</div>
     </div>
 
     <!-- Largura da Linha -->
@@ -427,6 +434,7 @@
       <div class="info-row"><span class="info-label">Segmentos</span><span class="info-val" id="info-seg-count">0</span></div>
       <div class="info-row"><span class="info-label">Comprimento total</span><span class="info-val" id="info-total-len">0.0 cm</span></div>
       <div class="info-row"><span class="info-label">Alertas críticos</span><span class="info-val warn" id="info-crit-count">0</span></div>
+      <div class="info-row"><span class="info-label">Deadzone</span><span class="info-val warn" id="info-dz-count">0</span></div>
     </div>
 
     <!-- Seleção -->
@@ -458,6 +466,13 @@
       <div class="prop-row">
         <label class="prop-label">Chegada (no segmento)</label>
         <span class="info-val" id="dijk-end" style="color:var(--node-end)">Não definido</span>
+      </div>
+      <div class="prop-row">
+        <label class="prop-label">Modo</label>
+        <select id="dijkstra-mode-select" class="prop-select">
+          <option value="shortest_path">Menor Caminho (Dijkstra)</option>
+          <option value="perimeter_loop">Perímetro do Loop Fechado</option>
+        </select>
       </div>
       <button id="btn-dijkstra" class="panel-btn primary">Calcular <span class="kbd">F5</span></button>
       <div id="dijk-result" class="hidden">
@@ -498,6 +513,15 @@
         <input type="checkbox" id="exp-cotas" checked />
         <label for="exp-cotas" class="prop-label">Cotas automáticas (&gt;1.5cm)</label>
       </div>
+      <div class="prop-row prop-check">
+        <input type="checkbox" id="exp-vertex-coords" checked />
+        <label for="exp-vertex-coords" class="prop-label">Mostrar coordenadas dos vértices</label>
+      </div>
+      <div class="coord-actions">
+        <button id="btn-coord-all" class="panel-btn" type="button">Marcar todos</button>
+        <button id="btn-coord-none" class="panel-btn" type="button">Limpar</button>
+      </div>
+      <div class="coord-hint">Na ferramenta <b>V</b>, clique no selo <b>E</b> de um vértice (verde = marcado, cinza = ignorado) ou use Ctrl+clique.</div>
       <button id="btn-export-pdf" class="panel-btn primary">Exportar PDF</button>
     </div>
   </aside>

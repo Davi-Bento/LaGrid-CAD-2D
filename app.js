@@ -11,6 +11,10 @@ const CRIT_ANGLE    = 90;       // alerta raio crítico (graus)
 const MIN_COTA_CM   = 1.5;      // mínimo para desenhar cota automática
 const DEFAULT_LINE_W = 1.9;     // cm — largura padrão de faixa
 const ANGLE_STEP_DEFAULT = 15;  // graus — snap angular configurável
+const DEFAULT_WORKSPACE_W = 285; // cm
+const DEFAULT_WORKSPACE_H = 180; // cm
+const DEFAULT_DEADZONE = 30;     // cm — margem de alerta até a borda
+const GRAPH_NODE_MERGE_EPS = 0.5; // cm — tolerância para agrupar endpoints em nós do grafo
 
 // ── ESTADO ────────────────────────────────────────────────
 const state = {
@@ -20,13 +24,17 @@ const state = {
   undoStack:     [],
   redoStack:     [],
   nextId:        1,
-  workspace:     { w: 200, h: 150 }, // cm
+  workspace:     { w: DEFAULT_WORKSPACE_W, h: DEFAULT_WORKSPACE_H }, // cm
+  deadzone:      DEFAULT_DEADZONE,    // cm — margem de alerta até a borda
   lineWidth:     DEFAULT_LINE_W,      // cm
   showGrid:      true,
   snapEnabled:   true,
   showCritical:  true,
   angleSnap:     false,               // snap angular ligado/desligado
   angleStep:     ANGLE_STEP_DEFAULT,  // passo do snap angular (graus)
+  dijkstraMode:  'shortest_path',    // 'shortest_path' | 'perimeter_loop'
+  orthoLock:     false,              // ortho lock estilo AutoCAD (F8)
+  showVertexCoords: true,            // mostrar coordenadas dos vértices no editor
 };
 
 const cam = { x: 0, y: 0, scale: 1 };
@@ -335,6 +343,60 @@ function distPtToSegPx(px,py,ax,ay,bx,by) {
   return Math.hypot(px-(ax+t*dx), py-(ay+t*dy));
 }
 
+// ── DEADZONE (margem de alerta até a borda) ────────────────
+function effectiveDeadzone() {
+  const half = Math.min(state.workspace.w, state.workspace.h) / 2;
+  return Math.max(0, Math.min(state.deadzone || 0, half));
+}
+
+function deadzoneRect() {
+  const dz = effectiveDeadzone();
+  return {
+    x0: dz,
+    y0: dz,
+    x1: state.workspace.w - dz,
+    y1: state.workspace.h - dz,
+    dz,
+  };
+}
+
+function pointOutsideRect(pt, r) {
+  const EPS = 1e-6;
+  return pt.x < r.x0 - EPS || pt.x > r.x1 + EPS ||
+         pt.y < r.y0 - EPS || pt.y > r.y1 + EPS;
+}
+
+function segInDeadzone(seg, r) {
+  if (seg.type === 'line') {
+    return pointOutsideRect(seg.points[0], r) || pointOutsideRect(seg.points[1], r);
+  }
+  if (seg.type === 'polyline') {
+    return seg.points.some(p => pointOutsideRect(p, r));
+  }
+  if (seg.type === 'circle') {
+    const c = seg.points[0];
+    return c.x - seg.radius < r.x0 - 1e-6 ||
+           c.x + seg.radius > r.x1 + 1e-6 ||
+           c.y - seg.radius < r.y0 - 1e-6 ||
+           c.y + seg.radius > r.y1 + 1e-6;
+  }
+  if (seg.type === 'arc') {
+    const g = arcGeometry(seg);
+    const N = g ? Math.max(32, Math.min(160, Math.ceil(Math.abs(g.sweep) * 24))) : 32;
+    for (let i = 0; i <= N; i++) {
+      if (pointOutsideRect(arcPointAt(seg, i / N), r)) return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+function findDeadzoneViolations() {
+  const r = deadzoneRect();
+  if (r.dz <= 0) return [];
+  return state.segments.filter(seg => segInDeadzone(seg, r));
+}
+
 // ── UNDO / REDO ───────────────────────────────────────────
 function snapshot() {
   return JSON.stringify({
@@ -440,6 +502,7 @@ function setTool(tool) {
   if (tool === 'offset') setStatus('Clique no objeto e depois no lado do offset');
   if (tool === 'trim')   setStatus('Clique no trecho que deseja remover');
   if (tool === 'extend') setStatus('Clique perto da extremidade que deseja estender');
+  if (tool === 'vertex-edit') setStatus('Clique no selo "E" (ou Ctrl+clique) para marcar/desmarcar coordenada · Alt+clique remove');
   render();
 }
 
@@ -1696,12 +1759,18 @@ function findNearestVertex(sx, sy) {
 }
 
 function vertexEditDown(sx, sy, e) {
+  // Clique no selo "E" marca/desmarca a coordenada do vértice.
+  const badge = vertexBadgeAt(sx, sy);
+  if (badge) { toggleVertexExport(badge.seg, badge.idx); return; }
+
   const hit = findNearestVertex(sx, sy);
-  if (!hit) { setStatus('Clique sobre um vértice (dblclick insere, Alt+clique remove)'); return; }
+  if (!hit) { setStatus('Clique no selo "E" (ou Ctrl+clique) para marcar coordenada · dblclick insere · Alt+clique remove'); return; }
   if (e.altKey) { removeVertexAt(hit); return; }
+  if (e.ctrlKey || e.metaKey || e.shiftKey) { toggleVertexExport(hit.seg, hit.idx); return; }
+
   saveUndo();
   ui.dragVertex = { segId: hit.seg.id, idx: hit.idx };
-  setStatus('Arraste o vértice · Alt+clique remove · dblclick insere');
+  setStatus('Arraste o vértice · clique no selo "E" marca coordenada · Alt+clique remove · dblclick insere');
 }
 
 function removeVertexAt(hit) {
@@ -1843,84 +1912,104 @@ function placeNode(sx, sy, kind) {
 // ligam o nó início ao nó chegada, passando pela rede de segmentos.
 // O comprimento inclui somente os segmentos do caminho,
 // descontando os trechos antes do início e após a chegada.
-function calcTrackLength() {
-  const ns = state.nodes.start, ne = state.nodes.end;
-  if (!ns || !ne) { toast('Defina os nós Início e Chegada em segmentos', 'warn'); return; }
+function runTrackAnalysis() {
+  state.dijkstraPath = []; // Limpa o destaque anterior
 
   // Grafo de segmentos conectados por endpoints
-  const EPS = 0.5;
-  const graph = buildGraph(EPS);
+  const graph = buildGraph(GRAPH_NODE_MERGE_EPS);
   if (!graph.nodes.length) { toast('Nenhum segmento para analisar', 'warn'); return; }
 
-  // Nó gráfico mais próximo do ponto de início/chegada no segmento
-  const startSeg = state.segments.find(s => s.id === ns.segId);
-  const endSeg   = state.segments.find(s => s.id === ne.segId);
-  if (!startSeg || !endSeg) { toast('Segmento do nó não encontrado', 'error'); return; }
+  if (state.dijkstraMode === 'shortest_path') {
+    const ns = state.nodes.start, ne = state.nodes.end;
+    if (!ns || !ne) { toast('Defina os nós Início e Chegada em segmentos', 'warn'); render(); return; }
 
-  // Endpoints do segmento de início e chegada
-  const [sA, sB] = segEndpoints(startSeg);
-  const [eA, eB] = segEndpoints(endSeg);
+    // Nó gráfico mais próximo do ponto de início/chegada no segmento
+    const startSeg = state.segments.find(s => s.id === ns.segId);
+    const endSeg   = state.segments.find(s => s.id === ne.segId);
+    if (!startSeg || !endSeg) { toast('Segmento do nó não encontrado', 'error'); render(); return; }
 
-  // Distâncias parciais nos segmentos de borda
-  const lenStart = segLength(startSeg);
-  const lenEnd   = segLength(endSeg);
-  const tS = ns.t, tE = ne.t;
-  // Trecho do nó início até o fim do segmento (direção B)
-  const dStartToB = lenStart * (1 - tS);
-  const dStartToA = lenStart * tS;
-  // Trecho do início do segmento de chegada até o nó chegada
-  const dAToEnd   = lenEnd * tE;
-  const dBToEnd   = lenEnd * (1 - tE);
+    // Endpoints do segmento de início e chegada
+    const [sA, sB] = segEndpoints(startSeg);
+    const [eA, eB] = segEndpoints(endSeg);
 
-  // Encontrar os 4 nós de grafo candidatos
-  const idxSA = findGraphNode(graph, sA);
-  const idxSB = findGraphNode(graph, sB);
-  const idxEA = findGraphNode(graph, eA);
-  const idxEB = findGraphNode(graph, eB);
+    // Distâncias parciais nos segmentos de borda
+    const lenStart = segLength(startSeg);
+    const lenEnd   = segLength(endSeg);
+    const tS = ns.t, tE = ne.t;
+    // Trecho do nó início até o fim do segmento (direção B)
+    const dStartToB = lenStart * (1 - tS);
+    const dStartToA = lenStart * tS;
+    // Trecho do início do segmento de chegada até o nó chegada
+    const dAToEnd   = lenEnd * tE;
+    const dBToEnd   = lenEnd * (1 - tE);
 
-  // Tentar todos os pares (sA/sB) → (eA/eB) e pegar menor
-  const candidates = [
-    { from: idxSA, extraFrom: dStartToA, to: idxEA, extraTo: dAToEnd },
-    { from: idxSA, extraFrom: dStartToA, to: idxEB, extraTo: dBToEnd },
-    { from: idxSB, extraFrom: dStartToB, to: idxEA, extraTo: dAToEnd },
-    { from: idxSB, extraFrom: dStartToB, to: idxEB, extraTo: dBToEnd },
-  ];
+    // Encontrar os 4 nós de grafo candidatos
+    const idxSA = findGraphNode(graph, sA);
+    const idxSB = findGraphNode(graph, sB);
+    const idxEA = findGraphNode(graph, eA);
+    const idxEB = findGraphNode(graph, eB);
 
-  let best = null;
-  for (const c of candidates) {
-    if (c.from < 0 || c.to < 0) continue;
-    // Se mesmo segmento de início e chegada
-    if (startSeg.id === endSeg.id) {
-      const direct = lenStart * Math.abs(tE - tS);
-      best = { dist: direct, path: [startSeg.id] };
-      break;
+    // Tentar todos os pares (sA/sB) → (eA/eB) e pegar menor
+    const candidates = [
+      { from: idxSA, extraFrom: dStartToA, to: idxEA, extraTo: dAToEnd },
+      { from: idxSA, extraFrom: dStartToA, to: idxEB, extraTo: dBToEnd },
+      { from: idxSB, extraFrom: dStartToB, to: idxEA, extraTo: dAToEnd },
+      { from: idxSB, extraFrom: dStartToB, to: idxEB, extraTo: dBToEnd },
+    ];
+
+    let best = null;
+    for (const c of candidates) {
+      if (c.from < 0 || c.to < 0) continue;
+      // Se mesmo segmento de início e chegada
+      if (startSeg.id === endSeg.id) {
+        const direct = lenStart * Math.abs(tE - tS);
+        best = { dist: direct, path: [startSeg.id] };
+        break;
+      }
+      const res = dijkstraGraph(graph, c.from, c.to);
+      if (!res) continue;
+      const total = c.extraFrom + res.dist + c.extraTo;
+      if (!best || total < best.dist) {
+        best = { dist: total, path: res.path, extraFrom: c.extraFrom, extraTo: c.extraTo };
+      }
     }
-    const res = dijkstraGraph(graph, c.from, c.to);
-    if (!res) continue;
-    const total = c.extraFrom + res.dist + c.extraTo;
-    if (!best || total < best.dist) {
-      best = { dist: total, path: res.path, extraFrom: c.extraFrom, extraTo: c.extraTo };
-    }
-  }
 
-  if (!best) {
-    toast('Nenhum caminho conectado encontrado', 'error');
-    state.dijkstraPath = [];
+    if (!best) {
+      toast('Nenhum caminho conectado encontrado', 'error');
+      render();
+      return;
+    }
+
+    const path = best.path.slice();
+    if (best.extraFrom > 1e-9 && path[0] !== startSeg.id) path.unshift(startSeg.id);
+    if (best.extraTo   > 1e-9 && path[path.length-1] !== endSeg.id) path.push(endSeg.id);
+
+    state.dijkstraPath = path;
     render();
-    return;
+
+    document.getElementById('dijk-result').classList.remove('hidden');
+    document.getElementById('dijk-dist').textContent = best.dist.toFixed(2) + ' cm';
+    document.getElementById('dijk-segs').textContent = path.length;
+    toast(`Pista: ${best.dist.toFixed(1)} cm · ${path.length} segmentos`, 'success');
+
+  } else if (state.dijkstraMode === 'perimeter_loop') {
+    const loopPath = findClosedLoop(graph);
+    if (!loopPath || loopPath.length === 0) { toast('Nenhum loop fechado encontrado', 'warn'); render(); return; }
+
+    let perimeter = 0;
+    for (const segId of loopPath) {
+      const seg = state.segments.find(s => s.id === segId);
+      if (seg) perimeter += segLength(seg);
+    }
+
+    state.dijkstraPath = loopPath;
+    render();
+
+    document.getElementById('dijk-result').classList.remove('hidden');
+    document.getElementById('dijk-dist').textContent = perimeter.toFixed(2) + ' cm';
+    document.getElementById('dijk-segs').textContent = loopPath.length;
+    toast(`Perímetro: ${perimeter.toFixed(1)} cm · ${loopPath.length} segmentos`, 'success');
   }
-
-  const path = best.path.slice();
-  if (best.extraFrom > 1e-9 && path[0] !== startSeg.id) path.unshift(startSeg.id);
-  if (best.extraTo   > 1e-9 && path[path.length-1] !== endSeg.id) path.push(endSeg.id);
-
-  state.dijkstraPath = path;
-  render();
-
-  document.getElementById('dijk-result').classList.remove('hidden');
-  document.getElementById('dijk-dist').textContent = best.dist.toFixed(2) + ' cm';
-  document.getElementById('dijk-segs').textContent = path.length;
-  toast(`Pista: ${best.dist.toFixed(1)} cm · ${path.length} segmentos`, 'success');
 }
 
 function buildGraph(EPS) {
@@ -1950,6 +2039,53 @@ function findGraphNode(graph, pt) {
     if (d < bestD) { bestD = d; best = i; }
   }
   return best;
+}
+
+// Acha um loop simples no grafo de segmentos e retorna os IDs dos segmentos
+function findClosedLoop(graph) {
+  const n = graph.nodes.length;
+  const visited = Array(n).fill(false);
+  const pathStack = [];
+  let loopSegments = null;
+
+  function dfs(u, incomingSegId, parentNodeIdx) {
+    visited[u] = true;
+    pathStack.push({ nodeIdx: u, segId: incomingSegId });
+
+    for (const edge of graph.edges.filter(e => e.from === u)) {
+      const v = edge.to;
+      const segId = edge.segId;
+
+      if (segId === incomingSegId && v === parentNodeIdx) continue;
+      if (v === u) continue;
+
+      if (visited[v]) {
+        const cycleStartIndex = pathStack.findIndex(item => item.nodeIdx === v);
+        if (cycleStartIndex !== -1) {
+          const loop = [];
+          for (let i = cycleStartIndex; i < pathStack.length; i++) {
+            if (pathStack[i].segId) loop.push(pathStack[i].segId);
+          }
+          loop.push(segId);
+          loopSegments = [...new Set(loop)];
+          return true;
+        }
+      }
+
+      if (dfs(v, segId, u)) return true;
+    }
+
+    pathStack.pop();
+    return false;
+  }
+
+  for (let i = 0; i < n; i++) {
+    if (!visited[i] && dfs(i, null, -1)) {
+      break;
+    }
+  }
+
+  return loopSegments;
 }
 
 function dijkstraGraph(graph, src, dst) {
@@ -2138,8 +2274,12 @@ function render() {
 
   if (state.showGrid)    drawGrid();
   drawWorkspaceBorder();
+  const dzViolations = findDeadzoneViolations();
+  drawDeadzone(dzViolations);
+  drawDeadzoneAlerts(dzViolations);
   drawSegments();
   drawVertexHandles();
+  drawVertexCoordLeader();
   drawNodes();
   if (state.showCritical) drawCriticalAlerts();
   drawPreview();
@@ -2193,6 +2333,46 @@ function drawWorkspaceBorder() {
   ctx.textAlign = 'left';
   ctx.textBaseline = 'bottom';
   ctx.fillText(`${state.workspace.w}×${state.workspace.h} cm`, tl.x+4, tl.y-3);
+}
+
+function drawDeadzone(violations) {
+  const r = deadzoneRect();
+  const countEl = document.getElementById('info-dz-count');
+  if (countEl) countEl.textContent = violations.length;
+  if (r.dz <= 0) return;
+
+  const tl = w2s(r.x0, r.y0);
+  const br = w2s(r.x1, r.y1);
+  const alert = violations.length > 0;
+  ctx.save();
+  ctx.strokeStyle = alert ? 'rgba(255,71,87,0.65)' : 'rgba(255,200,0,0.28)';
+  ctx.lineWidth   = alert ? 1.5 : 1;
+  ctx.setLineDash([4, 5]);
+  ctx.strokeRect(tl.x, tl.y, br.x-tl.x, br.y-tl.y);
+  ctx.setLineDash([]);
+
+  ctx.font = `${Math.max(8, 9*cam.scale)}px JetBrains Mono, monospace`;
+  ctx.fillStyle = alert ? 'rgba(255,71,87,0.85)' : 'rgba(255,200,0,0.5)';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'bottom';
+  const label = alert
+    ? `DEADZONE ${r.dz} cm · ${violations.length} trecho(s)`
+    : `Zona de segurança ${r.dz} cm`;
+  ctx.fillText(label, tl.x+4, tl.y-3);
+  ctx.restore();
+}
+
+function drawDeadzoneAlerts(violations) {
+  if (!violations.length) return;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,71,87,0.35)';
+  ctx.lineWidth   = Math.max(6, cm2px(state.lineWidth) + 6);
+  ctx.lineCap     = 'round';
+  ctx.lineJoin    = 'round';
+  ctx.shadowColor = 'rgba(255,71,87,0.5)';
+  ctx.shadowBlur  = 12;
+  for (const seg of violations) strokeSegPath(seg);
+  ctx.restore();
 }
 
 function drawSegments() {
@@ -2303,11 +2483,58 @@ function drawEndpoints(seg, sel) {
   });
 }
 
-function drawVertexHandles() {
-  if (ui.tool !== 'vertex-edit') return;
+// ── MARCAÇÃO DE COORDENADAS POR VÉRTICE ───────────────────
+// Todo vértice começa "cinza" (ignorado); exportCoord === true o marca.
+const BADGE_OFFSET = { x: 11, y: -11 };
+const BADGE_R = 6;
+
+function coordExportEnabled(pt) {
+  return !!pt && pt.exportCoord === true;
+}
+
+function toggleVertexExport(seg, idx) {
+  const pt = seg.points[idx];
+  if (!pt) return;
+  saveUndo();
+  pt.exportCoord = !coordExportEnabled(pt);
+  state.dijkstraPath = [];
+  updatePanelInfo();
+  updateSelectionPanel();
+  render();
+  toast(pt.exportCoord
+    ? `Coordenada marcada: (${pt.x.toFixed(2)}, ${pt.y.toFixed(2)})`
+    : 'Coordenada desmarcada', pt.exportCoord ? 'success' : '');
+  setStatus(pt.exportCoord
+    ? 'Coordenada marcada · Ctrl+clique alterna · Alt+clique remove'
+    : 'Coordenada desmarcada · Ctrl+clique alterna');
+}
+
+function vertexBadgeScreen(sp) {
+  return { x: sp.x + BADGE_OFFSET.x, y: sp.y + BADGE_OFFSET.y };
+}
+
+function vertexBadgeAt(sx, sy) {
+  let best = null, bestD = BADGE_R + 4;
   for (const seg of state.segments) {
     for (const v of segVertices(seg)) {
       const sp = w2s(v.pt.x, v.pt.y);
+      const bp = vertexBadgeScreen(sp);
+      const d = Math.hypot(bp.x - sx, bp.y - sy);
+      if (d < bestD) { bestD = d; best = { seg, idx: v.idx, pt: v.pt }; }
+    }
+  }
+  return best;
+}
+
+function drawVertexHandles() {
+  if (ui.tool !== 'vertex-edit') return;
+
+  for (const seg of state.segments) {
+    for (const v of segVertices(seg)) {
+      const sp = w2s(v.pt.x, v.pt.y);
+      const on = coordExportEnabled(v.pt);
+
+      // Handle do vértice
       ctx.save();
       ctx.fillStyle   = 'rgba(255,224,102,0.15)';
       ctx.strokeStyle = '#ffe066';
@@ -2317,8 +2544,153 @@ function drawVertexHandles() {
       ctx.fill();
       ctx.stroke();
       ctx.restore();
+
+      // Badge clicável: verde = coordenada marcada, cinza = desmarcada
+      const bp = vertexBadgeScreen(sp);
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(bp.x, bp.y, BADGE_R, 0, Math.PI * 2);
+      if (on) {
+        ctx.fillStyle   = '#00cc66';
+        ctx.strokeStyle = '#eafff2';
+      } else {
+        ctx.fillStyle   = 'rgba(20,24,30,0.92)';
+        ctx.strokeStyle = 'rgba(180,190,205,0.75)';
+      }
+      ctx.lineWidth = 1.4;
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle    = on ? '#04240f' : 'rgba(200,210,225,0.9)';
+      ctx.font         = 'bold 9px JetBrains Mono, monospace';
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('E', bp.x, bp.y + 0.5);
+      ctx.restore();
     }
   }
+}
+
+function drawVertexCoordLeader() {
+  if (!state.showVertexCoords) return;
+
+  const labels = [];
+  const placed = [];
+  const pxPerWorld = PX_PER_CM * cam.scale;
+
+  ctx.save();
+  ctx.font = '600 12px "JetBrains Mono", ui-monospace, monospace';
+  ctx.textBaseline = 'middle';
+
+  const entries = [];
+  for (const seg of state.segments) {
+    for (const pt of seg.points) {
+      if (coordExportEnabled(pt)) entries.push(pt);
+    }
+  }
+
+  for (const pt of entries) {
+    const sp = w2s(pt.x, pt.y);
+    const text = `(${pt.x.toFixed(2)}, ${pt.y.toFixed(2)})`;
+    const w = Math.max(74, ctx.measureText(text).width + 16);
+    const h = 21;
+    const gap = 16;
+
+    // Quatro quadrantes ao redor do vértice. A etiqueta fica sempre FORA da linha.
+    const dirs = [
+      { x:  1, y: -1 },
+      { x: -1, y: -1 },
+      { x: -1, y:  1 },
+      { x:  1, y:  1 },
+    ];
+
+    let best = null;
+    for (const d of dirs) {
+      const bx = d.x > 0 ? sp.x + gap : sp.x - gap - w;
+      const by = d.y > 0 ? sp.y + gap : sp.y - gap - h;
+
+      // Folga até a geometria (em px de tela): quanto maior, melhor.
+      let minDist = Infinity;
+      const probes = [
+        { x: bx + w * 0.5, y: by + h * 0.5 },
+        { x: bx + 6,       y: by + 6 },
+        { x: bx + w - 6,   y: by + h - 6 },
+      ];
+      for (const probe of probes) {
+        const wp = s2w(probe.x, probe.y);
+        for (const s of state.segments) {
+          const cp = closestPointOnSeg(s, wp.x, wp.y);
+          const dpx = cp.dist * pxPerWorld;
+          if (dpx < minDist) minDist = dpx;
+        }
+      }
+      let score = Math.min(minDist, 160);
+
+      // Penaliza sobreposição com outras etiquetas já posicionadas.
+      for (const b of placed) {
+        const overlap = !(bx + w < b.x || bx > b.x + b.w || by + h < b.y || by > b.y + b.h);
+        if (overlap) score -= 600;
+      }
+      // Mantém a etiqueta dentro da viewport (desconta a barra de status inferior).
+      if (bx < 6 || by < 6 || bx + w > canvas.width - 6 || by + h > canvas.height - 36) {
+        score -= 250;
+      }
+
+      if (!best || score > best.score) best = { score, bx, by };
+    }
+
+    placed.push({ x: best.bx, y: best.by, w, h });
+    labels.push({ sp, text, w, h, bx: best.bx, by: best.by });
+  }
+
+  for (const L of labels) {
+    // Ponto de ancoragem na borda da caixa mais próxima do vértice.
+    const ax = Math.max(L.bx + 5, Math.min(L.sp.x, L.bx + L.w - 5));
+    const ay = Math.max(L.by + 5, Math.min(L.sp.y, L.by + L.h - 5));
+
+    ctx.strokeStyle = 'rgba(74,158,255,0.95)';
+    ctx.fillStyle   = 'rgba(74,158,255,0.95)';
+    ctx.lineWidth   = 1.2;
+    ctx.lineJoin    = 'round';
+
+    // Linha de chamada (leader) do vértice até a etiqueta.
+    ctx.beginPath();
+    ctx.moveTo(L.sp.x, L.sp.y);
+    ctx.lineTo(ax, ay);
+    ctx.stroke();
+
+    // Marcador no vértice.
+    ctx.beginPath();
+    ctx.arc(L.sp.x, L.sp.y, 2.2, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Caixa de texto com fundo sólido e legível.
+    const r = 4;
+    ctx.beginPath();
+    ctx.moveTo(L.bx + r, L.by);
+    ctx.lineTo(L.bx + L.w - r, L.by);
+    ctx.arcTo(L.bx + L.w, L.by, L.bx + L.w, L.by + r, r);
+    ctx.lineTo(L.bx + L.w, L.by + L.h - r);
+    ctx.arcTo(L.bx + L.w, L.by + L.h, L.bx + L.w - r, L.by + L.h, r);
+    ctx.lineTo(L.bx + r, L.by + L.h);
+    ctx.arcTo(L.bx, L.by + L.h, L.bx, L.by + L.h - r, r);
+    ctx.lineTo(L.bx, L.by + r);
+    ctx.arcTo(L.bx, L.by, L.bx + r, L.by, r);
+    ctx.closePath();
+    ctx.fillStyle   = 'rgba(9,12,18,0.94)';
+    ctx.strokeStyle = 'rgba(74,158,255,0.95)';
+    ctx.lineWidth   = 1.1;
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle    = '#eaf2ff';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font         = '600 12px "JetBrains Mono", ui-monospace, monospace';
+    ctx.fillText(L.text, L.bx + L.w / 2, L.by + L.h / 2 + 0.5);
+  }
+
+  ctx.restore();
 }
 
 function drawDimension(seg) {
@@ -2680,6 +3052,21 @@ function onMouseMove(e) {
   document.getElementById('coord-x').textContent = display.x.toFixed(2);
   document.getElementById('coord-y').textContent = display.y.toFixed(2);
 
+  // Status bar coordinate display
+  const coordEl = document.getElementById('status-coord');
+  if (coordEl) {
+    let text = `X: ${display.x.toFixed(2)} cm  Y: ${display.y.toFixed(2)} cm`;
+    if (ui.tool === 'vertex-edit') {
+      const hit = findNearestVertex(sx, sy);
+      if (hit) {
+        text += coordExportEnabled(hit.pt)
+          ? '  ·  COORD: marcada'
+          : '  ·  COORD: livre (clique no selo E)';
+      }
+    }
+    coordEl.textContent = text;
+  }
+
   if (ui.isPanning) {
     cam.x = ui.camStart.x + (sx-ui.panStart.x);
     cam.y = ui.camStart.y + (sy-ui.panStart.y);
@@ -2877,7 +3264,7 @@ function onKeyDown(e) {
         document.getElementById('btn-toggle-snap').classList.toggle('active', state.snapEnabled);
       }
       break;
-    case 'F5': e.preventDefault(); calcTrackLength(); break;
+    case 'F5': e.preventDefault(); runTrackAnalysis(); break;
     case 'Home':
       cam.x = canvas.width/2; cam.y = canvas.height/2; cam.scale = 1;
       updateZoomDisplay(); render();
@@ -3017,13 +3404,44 @@ document.getElementById('sel-resize-apply').addEventListener('click', () => {
 });
 
 // ── ÁREA DE TRABALHO ──────────────────────────────────────
+// ── ÁREA DE TRABALHO ──────────────────────────────────────
 document.getElementById('btn-apply-workspace').addEventListener('click', () => {
-  const w = parseFloat(document.getElementById('workspace-w').value);
-  const h = parseFloat(document.getElementById('workspace-h').value);
+  const w  = parseFloat(document.getElementById('workspace-w').value);
+  const h  = parseFloat(document.getElementById('workspace-h').value);
+  const dz = parseFloat(document.getElementById('deadzone-input').value);
   if (isNaN(w)||isNaN(h)||w<=0||h<=0) { toast('Dimensões inválidas','warn'); return; }
+  if (isNaN(dz)||dz<0||dz*2 >= Math.min(w,h)) {
+    toast('Deadzone deve ser menor que metade da menor dimensão','warn');
+    return;
+  }
   state.workspace = { w, h };
+  state.deadzone  = dz;
   render();
-  toast(`Área de trabalho: ${w}×${h} cm`, 'success');
+  toast(`Área de trabalho: ${w}×${h} cm · deadzone ${dz} cm`, 'success');
+});
+
+// Deadzone configurável com alerta imediato
+document.getElementById('deadzone-input').addEventListener('change', () => {
+  const dz = parseFloat(document.getElementById('deadzone-input').value);
+  const minDim = Math.min(state.workspace.w, state.workspace.h);
+  if (isNaN(dz)||dz<0||dz*2 >= minDim) {
+    toast('Deadzone deve ser menor que metade da menor dimensão','warn');
+    document.getElementById('deadzone-input').value = state.deadzone;
+    return;
+  }
+  state.deadzone = dz;
+  render();
+});
+
+// Modo Dijkstra (menor caminho vs perímetro)
+document.getElementById('dijkstra-mode-select').addEventListener('change', () => {
+  const mode = document.getElementById('dijkstra-mode-select').value;
+  if (mode === 'shortest_path' || mode === 'perimeter_loop') {
+    state.dijkstraMode = mode;
+    state.dijkstraPath = [];
+    render();
+    toast(`Modo: ${mode === 'shortest_path' ? 'Menor Caminho' : 'Perímetro do Loop'}`, 'success');
+  }
 });
 
 // ── LARGURA DA LINHA ──────────────────────────────────────
@@ -3037,14 +3455,18 @@ document.getElementById('line-width-input').addEventListener('change', () => {
 // ── SAVE / LOAD ───────────────────────────────────────────
 function saveJSON() {
   const data = JSON.stringify({
-    version:   4,
+    version:   7,
     segments:  state.segments,
     nodes:     state.nodes,
     nextId:    state.nextId,
     workspace: state.workspace,
+    deadzone:  state.deadzone,
     lineWidth: state.lineWidth,
     angleSnap: state.angleSnap,
     angleStep: state.angleStep,
+    dijkstraMode: state.dijkstraMode,
+    orthoLock:    state.orthoLock,
+    showVertexCoords: state.showVertexCoords,
   }, null, 2);
   const a = document.createElement('a');
   a.href     = URL.createObjectURL(new Blob([data],{type:'application/json'}));
@@ -3077,6 +3499,30 @@ function loadJSON(file) {
         const stepEl = document.getElementById('angle-step-input');
         if (stepEl) stepEl.value = d.angleStep;
       }
+      if (typeof d.deadzone === 'number' && d.deadzone >= 0) {
+        state.deadzone = d.deadzone;
+        const dzEl = document.getElementById('deadzone-input');
+        if (dzEl) dzEl.value = d.deadzone;
+      }
+      if (typeof d.dijkstraMode === 'string') state.dijkstraMode = d.dijkstraMode;
+      if (typeof d.orthoLock === 'boolean') state.orthoLock = d.orthoLock;
+      if (typeof d.showVertexCoords === 'boolean') {
+        state.showVertexCoords = d.showVertexCoords;
+        const vcEl = document.getElementById('exp-vertex-coords');
+        if (vcEl) vcEl.checked = d.showVertexCoords;
+      }
+      // Normaliza a marcação de coordenadas de cada vértice.
+      // Ausente = cinza (ignorado); true = marcado.
+      for (const seg of state.segments) {
+        if (!Array.isArray(seg.points)) continue;
+        for (const pt of seg.points) {
+          pt.exportCoord = pt.exportCoord === true;
+        }
+      }
+      const modeEl = document.getElementById('dijkstra-mode-select');
+      if (modeEl) modeEl.value = state.dijkstraMode;
+      const orthoBtn = document.getElementById('btn-toggle-ortho');
+      if (orthoBtn) orthoBtn.classList.toggle('active', state.orthoLock);
       const angBtn = document.getElementById('btn-toggle-angle');
       if (angBtn) angBtn.classList.toggle('active', state.angleSnap);
       state.dijkstraPath = [];
@@ -3101,6 +3547,11 @@ function newProject() {
   state.segments = [];
   state.nodes    = { start:null, end:null };
   state.nextId   = 1;
+  state.workspace = { w: DEFAULT_WORKSPACE_W, h: DEFAULT_WORKSPACE_H };
+  state.deadzone  = DEFAULT_DEADZONE;
+  document.getElementById('workspace-w').value = DEFAULT_WORKSPACE_W;
+  document.getElementById('workspace-h').value = DEFAULT_WORKSPACE_H;
+  document.getElementById('deadzone-input').value = DEFAULT_DEADZONE;
   state.dijkstraPath = [];
   state.undoStack = [];
   state.redoStack = [];
@@ -3135,6 +3586,7 @@ function exportPDF() {
   const margin = parseFloat(document.getElementById('exp-margin').value) || 2;
   const invert = document.getElementById('exp-invert').checked;
   const cotas  = document.getElementById('exp-cotas').checked;
+  const showVertexCoords = document.getElementById('exp-vertex-coords').checked;
 
   if (!state.segments.length) { toast('Nenhum segmento para exportar','warn'); return; }
 
@@ -3251,6 +3703,89 @@ function exportPDF() {
     paths += `<text x="${sp.x.toFixed(1)}" y="${(sp.y+0.5).toFixed(1)}" font-family="JetBrains Mono,monospace" font-size="9" font-weight="bold" fill="${color}" text-anchor="middle" dominant-baseline="middle">${key==='start'?'S':'E'}</text>`;
   }
 
+  // Coordenadas dos vértices (se habilitado)
+  if (showVertexCoords) {
+    const coordColor = invert ? '#ffffff' : '#101018';
+    const boxFill    = invert ? 'rgba(0,0,0,0.82)' : 'rgba(255,255,255,0.96)';
+    const boxStroke  = invert ? 'rgba(255,255,255,0.75)' : 'rgba(20,24,40,0.55)';
+    const leaderCol  = invert ? 'rgba(120,190,255,0.9)' : 'rgba(30,90,190,0.85)';
+    const fontSize   = 11;
+    const placedBoxes = [];
+
+    // Converte SVG (px) de volta para o mundo (cm), para medir folga.
+    const svg2world = (sx, sy) => ({
+      x: (sx / CM2SVG - offX) / drawScale,
+      y: (sy / CM2SVG - offY) / drawScale,
+    });
+
+    for (const seg of state.segments) {
+      for (const pt of seg.points) {
+        if (!coordExportEnabled(pt)) continue;
+
+        const v = toSVG(pt.x, pt.y);
+        const text = `(${pt.x.toFixed(2)}, ${pt.y.toFixed(2)})`;
+        const boxW = Math.max(74, text.length * fontSize * 0.62 + 12);
+        const boxH = 17;
+        const gap  = 13;
+
+        const dirs = [
+          { x:  1, y: -1 },
+          { x: -1, y: -1 },
+          { x: -1, y:  1 },
+          { x:  1, y:  1 },
+        ];
+
+        let best = null;
+        for (const d of dirs) {
+          const bx = d.x > 0 ? v.x + gap : v.x - gap - boxW;
+          const by = d.y > 0 ? v.y + gap : v.y - gap - boxH;
+
+          // Folga até a geometria (em px do SVG).
+          let minDist = Infinity;
+          const probes = [
+            { x: bx + boxW * 0.5, y: by + boxH * 0.5 },
+            { x: bx + 5,          y: by + 5 },
+            { x: bx + boxW - 5,   y: by + boxH - 5 },
+          ];
+          for (const probe of probes) {
+            const wp = svg2world(probe.x, probe.y);
+            for (const other of state.segments) {
+              const cp = closestPointOnSeg(other, wp.x, wp.y);
+              const dpx = cp.dist * drawScale * CM2SVG;
+              if (dpx < minDist) minDist = dpx;
+            }
+          }
+          let score = Math.min(minDist, 140);
+
+          for (const b of placedBoxes) {
+            const overlap = !(bx + boxW < b.x || bx > b.x + b.w || by + boxH < b.y || by > b.y + b.h);
+            if (overlap) score -= 600;
+          }
+
+          // Mantém a etiqueta dentro da página.
+          const pagePxW = svgW * CM2SVG, pagePxH = svgH * CM2SVG;
+          if (bx < 3 || by < 3 || bx + boxW > pagePxW - 3 || by + boxH > pagePxH - 3) {
+            score -= 300;
+          }
+
+          if (!best || score > best.score) best = { score, bx, by };
+        }
+
+        placedBoxes.push({ x: best.bx, y: best.by, w: boxW, h: boxH });
+
+        // Linha de chamada do vértice até a borda da etiqueta.
+        const ax = Math.max(best.bx + 4, Math.min(v.x, best.bx + boxW - 4));
+        const ay = Math.max(best.by + 4, Math.min(v.y, best.by + boxH - 4));
+        paths += `<line x1="${v.x.toFixed(1)}" y1="${v.y.toFixed(1)}" x2="${ax.toFixed(1)}" y2="${ay.toFixed(1)}" stroke="${leaderCol}" stroke-width="0.9"/>`;
+        paths += `<circle cx="${v.x.toFixed(1)}" cy="${v.y.toFixed(1)}" r="1.6" fill="${leaderCol}"/>`;
+
+        // Caixa de fundo + texto legível.
+        paths += `<rect x="${best.bx.toFixed(1)}" y="${best.by.toFixed(1)}" width="${boxW.toFixed(1)}" height="${boxH.toFixed(1)}" rx="3" fill="${boxFill}" stroke="${boxStroke}" stroke-width="0.8"/>`;
+        paths += `<text x="${(best.bx + boxW / 2).toFixed(1)}" y="${(best.by + boxH / 2 + 0.5).toFixed(1)}" font-family="JetBrains Mono, ui-monospace, monospace" font-size="${fontSize}" font-weight="600" fill="${coordColor}" text-anchor="middle" dominant-baseline="middle">${text}</text>`;
+      }
+    }
+  }
+
   // Rodapé
   const footerY = (svgH - margin*0.4) * CM2SVG;
   const footerColor = invert?'rgba(255,255,255,0.3)':'rgba(0,0,0,0.25)';
@@ -3306,7 +3841,7 @@ document.querySelectorAll('[data-action]').forEach(btn => {
       case 'redo':        redo();          break;
       case 'select-all':  selectAll();     break;
       case 'delete-sel':  deleteSelection(); break;
-      case 'dijkstra':    calcTrackLength(); break;
+      case 'dijkstra':    runTrackAnalysis(); break;
       case 'clear-path':
         state.dijkstraPath = [];
         document.getElementById('dijk-result').classList.add('hidden');
@@ -3356,8 +3891,27 @@ document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
 document.getElementById('btn-undo').addEventListener('click', undo);
 document.getElementById('btn-redo').addEventListener('click', redo);
 document.getElementById('btn-delete-sel').addEventListener('click', deleteSelection);
-document.getElementById('btn-dijkstra').addEventListener('click', calcTrackLength);
+document.getElementById('btn-dijkstra').addEventListener('click', runTrackAnalysis);
 document.getElementById('btn-export-pdf').addEventListener('click', exportPDF);
+document.getElementById('exp-vertex-coords').addEventListener('change', e => {
+  state.showVertexCoords = e.target.checked;
+  render();
+});
+document.getElementById('btn-coord-all').addEventListener('click', () => {
+  if (!state.segments.length) { toast('Nenhum vértice para marcar', 'warn'); return; }
+  saveUndo();
+  for (const seg of state.segments)
+    for (const pt of seg.points) pt.exportCoord = true;
+  updatePanelInfo(); render();
+  toast('Todos os vértices marcados', 'success');
+});
+document.getElementById('btn-coord-none').addEventListener('click', () => {
+  saveUndo();
+  for (const seg of state.segments)
+    for (const pt of seg.points) pt.exportCoord = false;
+  updatePanelInfo(); render();
+  toast('Coordenadas desmarcadas');
+});
 document.getElementById('btn-zoom-reset').addEventListener('click', () => {
   cam.x = canvas.width/2; cam.y = canvas.height/2; cam.scale = 1;
   updateZoomDisplay(); render();

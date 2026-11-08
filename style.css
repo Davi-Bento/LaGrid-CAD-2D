@@ -492,6 +492,18 @@ select.hud-input {
 #status-msg { color: var(--text-secondary); flex: 1; }
 #status-sel { color: var(--text-dim); margin-left: 10px; }
 
+.status-coord {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  padding: 0 8px;
+  border-left: 1px solid var(--border);
+  margin-left: 8px;
+  background: rgba(74,158,255,0.08);
+  min-width: 180px;
+  text-align: center;
+}
+
 #status-right {
   display: flex;
   gap: 4px;
@@ -613,6 +625,28 @@ select.hud-input {
 }
 
 .prop-btn:hover { background: rgba(0, 255, 135, 0.12); border-color: var(--node-start); }
+
+.coord-actions {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.coord-actions .panel-btn {
+  flex: 1;
+  width: auto;
+  font-size: 10px;
+  padding: 5px 4px;
+}
+
+.coord-hint {
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-muted, #8a8f9a);
+  margin: -2px 0 8px;
+}
+
+.coord-hint b { color: var(--text-secondary, #c8ccd4); }
 
 .prop-select {
   width: 100%;
