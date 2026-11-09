@@ -11,6 +11,7 @@ const CRIT_ANGLE    = 90;       // alerta raio crítico (graus)
 const MIN_COTA_CM   = 1.5;      // mínimo para desenhar cota automática
 const DEFAULT_LINE_W = 1.9;     // cm — largura padrão de faixa
 const ANGLE_STEP_DEFAULT = 15;  // graus — snap angular configurável
+const DIST_STEP_DEFAULT  = 1;   // cm — snap de distância configurável
 const DEFAULT_WORKSPACE_W = 285; // cm
 const DEFAULT_WORKSPACE_H = 180; // cm
 const DEFAULT_DEADZONE = 30;     // cm — margem de alerta até a borda
@@ -32,6 +33,8 @@ const state = {
   showCritical:  true,
   angleSnap:     false,               // snap angular ligado/desligado
   angleStep:     ANGLE_STEP_DEFAULT,  // passo do snap angular (graus)
+  distSnap:      false,               // snap de distância ligado/desligado
+  distStep:      DIST_STEP_DEFAULT,   // passo do snap de distância (cm)
   dijkstraMode:  'shortest_path',    // 'shortest_path' | 'perimeter_loop'
   orthoLock:     false,              // ortho lock estilo AutoCAD (F8)
   showVertexCoords: true,            // mostrar coordenadas dos vértices no editor
@@ -365,18 +368,26 @@ function screenDistToSeg(seg, sx, sy) {
 function pointFromConstraint(origin, pt) {
   if (!origin) return pt;
   const dx = pt.x - origin.x, dy = pt.y - origin.y;
-  const dist = Math.hypot(dx, dy);
+  let dist = Math.hypot(dx, dy);
   if (dist < 1e-9) return pt;
   let ang = Math.atan2(dy, dx);
+  let constrained = false;
   if (ui.shiftKey) {
     const q = Math.PI / 2;
     ang = Math.round(ang / q) * q;
+    constrained = true;
   } else if (state.angleSnap) {
     const stepRad = (state.angleStep || ANGLE_STEP_DEFAULT) * Math.PI / 180;
     ang = Math.round(ang / stepRad) * stepRad;
-  } else {
-    return pt;
+    constrained = true;
   }
+  // Snap de distância: arredonda o comprimento para múltiplos do passo (cm)
+  if (state.distSnap) {
+    const ds = state.distStep || DIST_STEP_DEFAULT;
+    dist = Math.round(dist / ds) * ds;
+    constrained = true;
+  }
+  if (!constrained) return pt;
   return { x: origin.x + dist*Math.cos(ang), y: origin.y + dist*Math.sin(ang) };
 }
 
@@ -3947,6 +3958,7 @@ function onKeyDown(e) {
       }
       break;
     case 'F5': e.preventDefault(); runTrackAnalysis(); break;
+    case 'F9': e.preventDefault(); toggleDistSnap(); break;
     case 'Home':
       cam.x = canvas.width/2; cam.y = canvas.height/2; cam.scale = 1;
       updateZoomDisplay(); render();
@@ -4054,8 +4066,10 @@ function updatePolarHud() {
     return;
   }
 
-  const dx = ui.mouseWorld.x - ui.lineStart.x;
-  const dy = ui.mouseWorld.y - ui.lineStart.y;
+  // Usa o mesmo ponto restringido da prévia (ímã, passo angular e de distância)
+  const eff = ui.snapTarget ? { ...ui.snapTarget } : pointFromConstraint(ui.lineStart, ui.mouseWorld);
+  const dx = eff.x - ui.lineStart.x;
+  const dy = eff.y - ui.lineStart.y;
   const dist = Math.hypot(dx, dy);
   const ang = ((Math.atan2(-dy, dx) * 180/Math.PI) + 360) % 360;
 
@@ -4067,8 +4081,8 @@ function updatePolarHud() {
   } else {
     const endXIn = document.getElementById('polar-end-x-input');
     const endYIn = document.getElementById('polar-end-y-input');
-    if (endXIn && document.activeElement !== endXIn) endXIn.value = ui.mouseWorld.x.toFixed(2);
-    if (endYIn && document.activeElement !== endYIn) endYIn.value = ui.mouseWorld.y.toFixed(2);
+    if (endXIn && document.activeElement !== endXIn) endXIn.value = eff.x.toFixed(2);
+    if (endYIn && document.activeElement !== endYIn) endYIn.value = eff.y.toFixed(2);
   }
 }
 
@@ -4396,7 +4410,7 @@ document.getElementById('line-width-input').addEventListener('change', () => {
 // ── SAVE / LOAD ───────────────────────────────────────────
 function saveJSON() {
   const data = JSON.stringify({
-    version:   8,
+    version:   9,
     segments:  state.segments,
     nodes:     state.nodes,
     nextId:    state.nextId,
@@ -4405,6 +4419,8 @@ function saveJSON() {
     lineWidth: state.lineWidth,
     angleSnap: state.angleSnap,
     angleStep: state.angleStep,
+    distSnap:  state.distSnap,
+    distStep:  state.distStep,
     dijkstraMode: state.dijkstraMode,
     orthoLock:    state.orthoLock,
     showVertexCoords: state.showVertexCoords,
@@ -4441,6 +4457,12 @@ function loadJSON(file) {
         const stepEl = document.getElementById('angle-step-input');
         if (stepEl) stepEl.value = d.angleStep;
       }
+      if (typeof d.distSnap === 'boolean') state.distSnap = d.distSnap;
+      if (typeof d.distStep === 'number' && d.distStep > 0) {
+        state.distStep = d.distStep;
+        const dStepEl = document.getElementById('dist-step-input');
+        if (dStepEl) dStepEl.value = d.distStep;
+      }
       if (typeof d.deadzone === 'number' && d.deadzone >= 0) {
         state.deadzone = d.deadzone;
         const dzEl = document.getElementById('deadzone-input');
@@ -4472,6 +4494,8 @@ function loadJSON(file) {
       if (orthoBtn) orthoBtn.classList.toggle('active', state.orthoLock);
       const angBtn = document.getElementById('btn-toggle-angle');
       if (angBtn) angBtn.classList.toggle('active', state.angleSnap);
+      const distBtn = document.getElementById('btn-toggle-dist');
+      if (distBtn) distBtn.classList.toggle('active', state.distSnap);
       state.dijkstraPath = [];
       ui.selection.clear();
       updatePanelInfo();
@@ -4952,6 +4976,19 @@ document.getElementById('btn-toggle-angle').addEventListener('click', () => {
 document.getElementById('angle-step-input').addEventListener('change', () => {
   const v = parseFloat(document.getElementById('angle-step-input').value);
   if (!isNaN(v) && v > 0) state.angleStep = v;
+});
+
+// Snap de distância configurável (F9)
+function toggleDistSnap() {
+  state.distSnap = !state.distSnap;
+  const btn = document.getElementById('btn-toggle-dist');
+  if (btn) btn.classList.toggle('active', state.distSnap);
+  render();
+}
+document.getElementById('btn-toggle-dist').addEventListener('click', toggleDistSnap);
+document.getElementById('dist-step-input').addEventListener('change', () => {
+  const v = parseFloat(document.getElementById('dist-step-input').value);
+  if (!isNaN(v) && v > 0) state.distStep = v;
 });
 
 // Previne Tab de sair dos HUDs — navega entre os campos internos

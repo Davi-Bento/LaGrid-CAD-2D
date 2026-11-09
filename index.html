@@ -468,6 +468,7 @@
         <button id="btn-toggle-grid" class="status-toggle active" title="G">GRADE</button>
         <button id="btn-toggle-snap" class="status-toggle active" title="S">SNAP</button>
         <button id="btn-toggle-angle" class="status-toggle" title="Snap angular (passo configurável)">ANG</button>
+        <button id="btn-toggle-dist" class="status-toggle" title="Snap de distância (passo configurável · F9)">DIST</button>
         <button id="btn-toggle-ortho" class="status-toggle" title="Ortho Lock (F8)">ORTHO</button>
       </div>
     </div>
@@ -512,12 +513,16 @@
         <label class="prop-label">Passo angular (°)</label>
         <input type="number" id="angle-step-input" class="prop-input" value="15" step="1" min="1" max="180" />
       </div>
+      <div class="prop-row">
+        <label class="prop-label">Passo de distância (cm)</label>
+        <input type="number" id="dist-step-input" class="prop-input" value="1" step="0.1" min="0.01" />
+      </div>
       <div class="prop-row prop-check">
         <input type="checkbox" id="circle-quads-toggle" checked />
         <label for="circle-quads-toggle" class="prop-label">Pontos N/L/S/O nos círculos</label>
       </div>
       <div class="hud-hint" style="margin-top:4px;font-size:10px">Tab no círculo = centro / borda · Ctrl+clique em N/L/S/O inicia ali</div>
-      <div class="hud-hint" style="margin-top:4px;font-size:10px">Shift durante o desenho = ortho 90°</div>
+      <div class="hud-hint" style="margin-top:4px;font-size:10px">DIST (F9) = passos de distância em cm · Shift = ortho 90°</div>
     </div>
 
     <!-- Info -->
