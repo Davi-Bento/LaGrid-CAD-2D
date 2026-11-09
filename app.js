@@ -65,7 +65,7 @@ const ui = {
   coordMode:    'abs',  // 'abs' | 'rel'
   circleMode:   'center', // 'center' | 'side' (Tab alterna)
   circleSide:   'E',      // lado do centro em relação ao início: E/N/W/S
-  spiralCenter: null,     // centro da espiral em construção
+  spiralAnchor: null,     // ponto de referência da espiral em construção
   polarInputMode: 'polar', // 'polar' | 'absolute' — modo de entrada do HUD polar
   prevMouseScreen:  null,
   dragMove:     null,   // arrasto de objetos selecionados { ids, originals, nodeOriginals, start, moved }
@@ -529,7 +529,7 @@ function setTool(tool) {
   ui.polyPoints   = [];
   ui.rectStart    = null;
   ui.circleCenter = null;
-  ui.spiralCenter = null;
+  ui.spiralAnchor = null;
   ui.dragVertex   = null;
   ui.mirrorPts    = [];
   ui.offsetTargetId = null;
@@ -810,49 +810,82 @@ function spiralInput(id, def) {
 
 function readSpiralParams() {
   const dirEl = document.getElementById('spiral-dir');
-  const count = Math.round(spiralInput('spiral-count', 60));
+  const anchorEl = document.getElementById('spiral-anchor');
+  const count = Math.max(1, Math.min(2000, Math.round(spiralInput('spiral-count', 60))));
+  let subdiv = Math.max(1, Math.min(20, Math.round(spiralInput('spiral-subdiv', 4))));
+  // Limite de segurança: no máximo 8000 segmentos por espiral
+  if (count * subdiv > 8000) subdiv = Math.max(1, Math.floor(8000 / count));
   return {
-    center:     ui.spiralCenter ? { ...ui.spiralCenter } : { ...ui.mouseWorld },
-    r1:         spiralInput('spiral-r1', 2.5),
-    stepAngle:  spiralInput('spiral-angle', ANGLE_STEP_DEFAULT),
-    factor:     spiralInput('spiral-factor', 1.017),
-    count:      Math.max(1, Math.min(2000, count)),
-    startAngle: spiralInput('spiral-start', 90),
-    dir:        dirEl && dirEl.value === '-1' ? -1 : 1,
-    tail:       Math.max(0, spiralInput('spiral-tail', 0)),
+    anchorPoint: ui.spiralAnchor ? { ...ui.spiralAnchor } : { ...ui.mouseWorld },
+    anchor:      anchorEl ? anchorEl.value : 'center',
+    r1:          spiralInput('spiral-r1', 2.5),
+    stepAngle:   spiralInput('spiral-angle', ANGLE_STEP_DEFAULT),
+    factor:      spiralInput('spiral-factor', 1.017),
+    count,
+    subdiv,
+    startAngle:  spiralInput('spiral-start', 90),
+    dir:         dirEl && dirEl.value === '-1' ? -1 : 1,
+    tail:        Math.max(0, spiralInput('spiral-tail', 0)),
   };
 }
 
-function buildSpiralPoints(center, p) {
-  const pts = [];
+// Gera a espiral em coordenadas locais (centro na origem), posiciona o ponto
+// de referência escolhido sobre `anchorPoint` e devolve também o centro final.
+function buildSpiralPoints(anchorPoint, p) {
   const startRad = p.startAngle * Math.PI / 180;
   const stepRad  = p.stepAngle  * Math.PI / 180;
-  // Cauda: prolonga a ponta interna (raio R1) no mesmo raio
-  if (p.tail > 0) {
-    const r = p.r1 + p.tail;
-    pts.push({ x: center.x + r * Math.cos(startRad),
-               y: center.y + r * Math.sin(startRad) });
+  const sub      = p.subdiv || 1;
+  const dStep    = stepRad / sub;
+  const dFactor  = Math.pow(p.factor, 1 / sub);
+  const n        = p.count * sub;
+
+  const local = [];
+  for (let i = 0; i <= n; i++) {
+    const r = p.r1 * Math.pow(dFactor, i);
+    const a = startRad + p.dir * i * dStep;
+    local.push({ x: r * Math.cos(a), y: r * Math.sin(a) });
   }
-  for (let i = 0; i <= p.count; i++) {
-    const r = p.r1 * Math.pow(p.factor, i);
-    const a = startRad + p.dir * i * stepRad;
-    pts.push({ x: center.x + r * Math.cos(a),
-               y: center.y + r * Math.sin(a) });
+
+  // Cauda tangente: prolonga o primeiro trecho na direção oposta ao sentido
+  // de crescimento, sem formar ângulo com a espiral.
+  let tailPt = null;
+  if (p.tail > 0 && local.length >= 2) {
+    const p0 = local[0], p1 = local[1];
+    let tx = p0.x - p1.x, ty = p0.y - p1.y;
+    const tl = Math.hypot(tx, ty);
+    if (tl > 1e-12) {
+      tx /= tl; ty /= tl;
+      tailPt = { x: p0.x + tx * p.tail, y: p0.y + ty * p.tail };
+    }
   }
-  return pts;
+
+  // Ponto de referência que ficará sobre o ponto informado
+  let ref = { x: 0, y: 0 };
+  if (p.anchor === 'start') {
+    ref = local[0];
+  } else if (p.anchor === 'tail' && tailPt) {
+    ref = tailPt;
+  }
+
+  const dx = anchorPoint.x - ref.x;
+  const dy = anchorPoint.y - ref.y;
+  const pts = [];
+  if (tailPt) pts.push({ x: tailPt.x + dx, y: tailPt.y + dy });
+  for (const q of local) pts.push({ x: q.x + dx, y: q.y + dy });
+  return { points: pts, center: { x: dx, y: dy } };
 }
 
-function syncSpiralCenterInputs() {
-  if (!ui.spiralCenter) return;
+function syncSpiralAnchorInputs() {
+  if (!ui.spiralAnchor) return;
   const cx = document.getElementById('spiral-cx');
   const cy = document.getElementById('spiral-cy');
-  if (cx) cx.value = ui.spiralCenter.x.toFixed(2);
-  if (cy) cy.value = ui.spiralCenter.y.toFixed(2);
+  if (cx) cx.value = ui.spiralAnchor.x.toFixed(2);
+  if (cy) cy.value = ui.spiralAnchor.y.toFixed(2);
 }
 
 function showSpiralHud() {
-  if (!ui.spiralCenter) ui.spiralCenter = { ...ui.mouseWorld };
-  syncSpiralCenterInputs();
+  if (!ui.spiralAnchor) ui.spiralAnchor = { ...ui.mouseWorld };
+  syncSpiralAnchorInputs();
   const hud = document.getElementById('spiral-hud');
   if (hud) hud.classList.remove('hidden');
   updateSpiralInfo();
@@ -867,17 +900,24 @@ function updateSpiralInfo() {
   const p = readSpiralParams();
   const turns = (p.count * p.stepAngle) / 360;
   const rEnd  = p.r1 * Math.pow(p.factor, p.count);
-  const info  = document.getElementById('spiral-info');
+  const anchorNames = { center: 'Centro', start: 'Início', tail: 'Cauda' };
+  const base = anchorNames[p.anchor] || 'Centro';
+  const cxLabel = document.getElementById('spiral-cx-label');
+  const cyLabel = document.getElementById('spiral-cy-label');
+  if (cxLabel) cxLabel.textContent = `${base} X (cm)`;
+  if (cyLabel) cyLabel.textContent = `${base} Y (cm)`;
+  const info = document.getElementById('spiral-info');
   if (!info) return;
+  const total = p.count * p.subdiv + 1 + (p.tail > 0 ? 1 : 0);
   info.textContent =
-    `${turns.toFixed(2)} volta(s) · raio final ${Number.isFinite(rEnd) ? rEnd.toFixed(2) : '—'} cm · ${p.count + 1} pontos`;
+    `${turns.toFixed(2)} volta(s) · raio final ${Number.isFinite(rEnd) ? rEnd.toFixed(2) : '—'} cm · ${total} pontos`;
 }
 
 function spiralClick(wx, wy) {
-  ui.spiralCenter = ui.snapTarget ? { ...ui.snapTarget } : { x: wx, y: wy };
-  syncSpiralCenterInputs();
+  ui.spiralAnchor = ui.snapTarget ? { ...ui.snapTarget } : { x: wx, y: wy };
+  syncSpiralAnchorInputs();
   updateSpiralInfo();
-  setStatus('Centro definido · ajuste os parâmetros e clique em Aplicar (ou Enter)');
+  setStatus('Ponto de referência definido · ajuste os parâmetros e clique em Aplicar (ou Enter)');
   render();
 }
 
@@ -893,7 +933,7 @@ function applySpiral() {
     toast('Fator de expansão deve ser maior que zero', 'warn'); return;
   }
 
-  const pts = buildSpiralPoints(p.center, p);
+  const { points: pts } = buildSpiralPoints(p.anchorPoint, p);
   if (pts.length < 2) { toast('Espiral sem pontos', 'warn'); return; }
 
   saveUndo();
@@ -909,8 +949,8 @@ function applySpiral() {
   render();
 
   const turns = (p.count * p.stepAngle) / 360;
-  toast(`Espiral criada · ${turns.toFixed(2)} volta(s) · ${p.count + 1} pontos`, 'success');
-  setStatus(`Espiral: R1=${p.r1} cm · A=${p.stepAngle}° · F=${p.factor} · N=${p.count}`);
+  toast(`Espiral criada · ${turns.toFixed(2)} volta(s) · ${pts.length} pontos`, 'success');
+  setStatus(`Espiral: R1=${p.r1} cm · A=${p.stepAngle}° · F=${p.factor} · N=${p.count} · Sub=${p.subdiv}`);
 }
 
 // ── ROUND / FILLET ────────────────────────────────────────
@@ -3419,8 +3459,8 @@ function drawPreview() {
   }
 
   if (ui.tool === 'spiral') {
-    const p   = readSpiralParams();
-    const pts = buildSpiralPoints(p.center, p);
+    const p = readSpiralParams();
+    const { points: pts, center } = buildSpiralPoints(p.anchorPoint, p);
     if (pts.length > 1) {
       ctx.save();
       ctx.setLineDash([5, 4]);
@@ -3438,7 +3478,7 @@ function drawPreview() {
       ctx.stroke();
       ctx.setLineDash([]);
       // Marca o centro da espiral
-      const c = w2s(p.center.x, p.center.y);
+      const c = w2s(center.x, center.y);
       ctx.strokeStyle = '#ffe066';
       ctx.lineWidth   = 1;
       ctx.beginPath();
@@ -4134,7 +4174,7 @@ function cancelCurrentTool() {
   ui.circleCenter = null;
   ui.circleMode   = 'center';
   ui.circleSide   = 'E';
-  ui.spiralCenter = null;
+  ui.spiralAnchor = null;
   ui.mirrorPts    = [];
   ui.dragVertex   = null;
   ui.offsetTargetId = null;
@@ -4586,7 +4626,8 @@ function saveJSON() {
     showCircleQuads:  state.showCircleQuads,
     spiral: {
       r1: sp.r1, angle: sp.stepAngle, factor: sp.factor,
-      count: sp.count, start: sp.startAngle, dir: sp.dir, tail: sp.tail,
+      count: sp.count, subdiv: sp.subdiv, start: sp.startAngle,
+      dir: sp.dir, tail: sp.tail, anchor: sp.anchor,
     },
   }, null, 2);
   const a = document.createElement('a');
@@ -4653,10 +4694,13 @@ function loadJSON(file) {
         setVal('spiral-angle', sp.angle);
         setVal('spiral-factor', sp.factor);
         setVal('spiral-count', sp.count);
+        setVal('spiral-subdiv', sp.subdiv);
         setVal('spiral-start', sp.start);
         setVal('spiral-tail', sp.tail);
         const dirEl = document.getElementById('spiral-dir');
         if (dirEl && (sp.dir === 1 || sp.dir === -1)) dirEl.value = String(sp.dir);
+        const anchorEl = document.getElementById('spiral-anchor');
+        if (anchorEl && ['center', 'start', 'tail'].includes(sp.anchor)) anchorEl.value = sp.anchor;
         updateSpiralInfo();
       }
       // Normaliza a marcação de coordenadas de cada vértice.
@@ -4711,7 +4755,7 @@ function newProject() {
   ui.polyPoints   = [];
   ui.rectStart    = null;
   ui.circleCenter = null;
-  ui.spiralCenter = null;
+  ui.spiralAnchor = null;
   ui.mirrorPts    = [];
   ui.dragVertex   = null;
   ui.offsetTargetId = null;
@@ -5251,14 +5295,14 @@ document.getElementById('spiral-cancel-btn').addEventListener('click', () => {
   setTool('select');
 });
 ['spiral-cx', 'spiral-cy', 'spiral-r1', 'spiral-angle', 'spiral-factor',
- 'spiral-count', 'spiral-start', 'spiral-tail'].forEach(id => {
+ 'spiral-count', 'spiral-subdiv', 'spiral-start', 'spiral-tail'].forEach(id => {
   const el = document.getElementById(id);
   if (!el) return;
   el.addEventListener('input', () => {
     if (id === 'spiral-cx' || id === 'spiral-cy') {
       const cx = parseFloat(document.getElementById('spiral-cx').value);
       const cy = parseFloat(document.getElementById('spiral-cy').value);
-      if (Number.isFinite(cx) && Number.isFinite(cy)) ui.spiralCenter = { x: cx, y: cy };
+      if (Number.isFinite(cx) && Number.isFinite(cy)) ui.spiralAnchor = { x: cx, y: cy };
     }
     updateSpiralInfo();
     render();
@@ -5273,6 +5317,13 @@ document.getElementById('spiral-dir').addEventListener('change', () => {
   render();
 });
 document.getElementById('spiral-dir').addEventListener('keydown', e => {
+  if (e.key === 'Escape') { hideSpiralHud(); setTool('select'); }
+});
+document.getElementById('spiral-anchor').addEventListener('change', () => {
+  updateSpiralInfo();
+  render();
+});
+document.getElementById('spiral-anchor').addEventListener('keydown', e => {
   if (e.key === 'Escape') { hideSpiralHud(); setTool('select'); }
 });
 
