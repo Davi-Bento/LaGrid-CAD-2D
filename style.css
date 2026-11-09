@@ -461,6 +461,18 @@ select.hud-input {
   letter-spacing: 0.04em;
 }
 
+/* HUD Espiral — compacto para caber os parâmetros */
+#spiral-hud {
+  min-width: 330px;
+  padding: 10px 14px;
+}
+#spiral-hud .hud-row + .hud-row { margin-top: 5px; }
+#spiral-hud .hud-label { min-width: 106px; }
+#spiral-hud .hud-input { padding: 4px 8px; font-size: 12px; }
+#spiral-hud .hud-actions { margin-top: 8px; }
+#spiral-hud .hud-hint { margin-top: 5px; }
+#spiral-info { color: var(--accent); }
+
 /* ── STATUS BAR ── */
 #status-bar {
   position: absolute;
