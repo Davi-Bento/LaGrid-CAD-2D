@@ -2701,8 +2701,10 @@ function drawGrid() {
 }
 
 function drawGridLines(cellPx) {
-  const sx = ((-cam.x % cellPx) + cellPx) % cellPx;
-  const sy = ((-cam.y % cellPx) + cellPx) % cellPx;
+  // Fase ancorada ao mundo: a linha de grade k fica em x = k*cellPx + cam.x.
+  // Módulo positivo garante o mesmo reticulado ao mover/zoom da câmera.
+  const sx = ((cam.x % cellPx) + cellPx) % cellPx;
+  const sy = ((cam.y % cellPx) + cellPx) % cellPx;
   ctx.beginPath();
   for (let x = sx; x < canvas.width;  x += cellPx) { ctx.moveTo(x,0); ctx.lineTo(x,canvas.height); }
   for (let y = sy; y < canvas.height; y += cellPx) { ctx.moveTo(0,y); ctx.lineTo(canvas.width,y); }
