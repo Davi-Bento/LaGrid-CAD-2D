@@ -849,8 +849,9 @@ function buildSpiralPoints(anchorPoint, p) {
     local.push({ x: r * Math.cos(a), y: -r * Math.sin(a) });
   }
 
-  // Cauda tangente: prolonga o primeiro trecho na direção oposta ao sentido
-  // de crescimento, sem formar ângulo com a espiral.
+  // Cauda tangente, mas sempre alinhada aos eixos: horizontal (deitada) ou
+  // vertical (em pé), conforme o ângulo inicial. Com ângulos múltiplos de 90°
+  // o encaixe no eixo mantém a continuidade visual com a espiral.
   let tailPt = null;
   if (p.tail > 0 && local.length >= 2) {
     const p0 = local[0], p1 = local[1];
@@ -858,6 +859,8 @@ function buildSpiralPoints(anchorPoint, p) {
     const tl = Math.hypot(tx, ty);
     if (tl > 1e-12) {
       tx /= tl; ty /= tl;
+      if (Math.abs(tx) >= Math.abs(ty)) { tx = tx >= 0 ? 1 : -1; ty = 0; }
+      else                              { ty = ty >= 0 ? 1 : -1; tx = 0; }
       tailPt = { x: p0.x + tx * p.tail, y: p0.y + ty * p.tail };
     }
   }
