@@ -3699,7 +3699,11 @@ function showCircleHud() {
     document.getElementById('circle-start-x-input').value = ui.mouseWorld.x.toFixed(2);
     document.getElementById('circle-start-y-input').value = ui.mouseWorld.y.toFixed(2);
   }
-  // NÃO foca automaticamente para permitir Tab para alternar modo
+  // Auto-foca no input de Raio (modo centro é o padrão)
+  setTimeout(() => {
+    const radiusInput = document.getElementById('circle-radius-input');
+    if (radiusInput) radiusInput.focus();
+  }, 30);
 }
 
 function hideCircleHud() {
