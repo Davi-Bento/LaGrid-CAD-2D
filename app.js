@@ -578,7 +578,7 @@ function lineClick(wx, wy) {
   if (!ui.snapTarget) pt = pointFromConstraint(ui.lineStart, pt);
   commitLine(ui.lineStart, pt);
   ui.lineStart = { ...pt };
-  updatePolarHudOrigin(ui.lineStart);
+  updatePolarHud();
 }
 
 function commitLine(p0, p1) {
@@ -1979,7 +1979,7 @@ function applyCoordHud() {
   if (ui.lineStart) commitLine(ui.lineStart, target);
   ui.lineStart = { ...target };
   if (!document.getElementById('polar-hud').classList.contains('hidden')) {
-    updatePolarHudOrigin(target);
+    updatePolarHud();
   }
   updatePanelInfo();
   setStatus(`Coordenada (${target.x.toFixed(2)}, ${target.y.toFixed(2)}) cm`);
@@ -3338,6 +3338,8 @@ function onMouseMove(e) {
 
   // Atualiza HUD do círculo em tempo real
   if (ui.tool === 'circle') updateCircleHud();
+  // Atualiza HUD polar da linha em tempo real
+  if (ui.tool === 'line' && ui.lineStart) updatePolarHud();
 
   // Status bar coordinate display
   const coordEl = document.getElementById('status-coord');
@@ -3609,16 +3611,19 @@ function showPolarHud(origin) {
   document.getElementById('polar-dist-input').value  = '';
   document.getElementById('polar-angle-input').value = '0';
   document.getElementById('polar-hud').classList.remove('hidden');
-  // Foca no campo de distância sem usar Tab
-  setTimeout(() => document.getElementById('polar-dist-input').focus(), 30);
+  // NÃO foca automaticamente para permitir Tab no canvas
 }
 
-function updatePolarHudOrigin(pt) {
-  // atualiza ângulo baseado na posição do mouse
-  const dx = ui.mouseWorld.x - pt.x;
-  const dy = ui.mouseWorld.y - pt.y;
+function updatePolarHud() {
+  if (!ui.lineStart) return;
+  const dx = ui.mouseWorld.x - ui.lineStart.x;
+  const dy = ui.mouseWorld.y - ui.lineStart.y;
+  const dist = Math.hypot(dx, dy);
   const ang = ((Math.atan2(-dy, dx) * 180/Math.PI) + 360) % 360;
-  document.getElementById('polar-angle-input').value = ang.toFixed(1);
+  const distIn = document.getElementById('polar-dist-input');
+  const angIn = document.getElementById('polar-angle-input');
+  if (distIn && document.activeElement !== distIn) distIn.value = dist.toFixed(2);
+  if (angIn && document.activeElement !== angIn) angIn.value = ang.toFixed(1);
 }
 
 function hidePolarHud() {
@@ -4467,6 +4472,15 @@ document.getElementById('move-angle-input').addEventListener('keydown', e => {
 });
 document.getElementById('circle-mode-select').addEventListener('keydown', e => {
   if (e.key === 'Escape') { hideCircleHud(); setTool('select'); }
+});
+
+// Polar HUD - Enter/Escape
+['polar-dist-input', 'polar-angle-input'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); commitPolarHud(); }
+    if (e.key === 'Escape') { hidePolarHud(); setTool('select'); }
+  });
 });
 
 // ── STATUS ────────────────────────────────────────────────
