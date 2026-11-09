@@ -533,6 +533,7 @@ function setTool(tool) {
   if (tool === 'scale')  showScaleHud();
   if (tool === 'array')  showArrayHud();
   if (tool === 'circle') showCircleHud();
+  if (tool === 'line')   showPolarHud(null);  // Abre HUD com posição do mouse como sugestão
 
   const labels = {
     select:       'SELECIONAR',
@@ -3609,9 +3610,19 @@ function cancelCurrentTool() {
 
 // ── HUD POLAR (LINHA) ─────────────────────────────────────
 function showPolarHud(origin) {
-  // Preenche coordenadas do ponto de início (somente leitura)
-  document.getElementById('polar-start-x').textContent = origin.x.toFixed(2);
-  document.getElementById('polar-start-y').textContent = origin.y.toFixed(2);
+  const hasOrigin = origin !== null && origin !== undefined;
+
+  // Preenche Início X/Y (agora são inputs editáveis)
+  const startXIn = document.getElementById('polar-start-x-input');
+  const startYIn = document.getElementById('polar-start-y-input');
+  if (hasOrigin) {
+    if (startXIn && document.activeElement !== startXIn) startXIn.value = origin.x.toFixed(2);
+    if (startYIn && document.activeElement !== startYIn) startYIn.value = origin.y.toFixed(2);
+  } else {
+    // Se não há origem, preenche com posição atual do mouse como sugestão
+    if (startXIn && document.activeElement !== startXIn) startXIn.value = ui.mouseWorld.x.toFixed(2);
+    if (startYIn && document.activeElement !== startYIn) startYIn.value = ui.mouseWorld.y.toFixed(2);
+  }
 
   // Reseta modo de entrada para o padrão
   ui.polarInputMode = ui.polarInputMode || 'polar';
@@ -3623,6 +3634,11 @@ function showPolarHud(origin) {
   // Mostra/esconde grupos de campos conforme o modo
   const polarFields = document.getElementById('polar-fields-polar');
   const absFields = document.getElementById('polar-fields-absolute');
+  const absStartFields = document.getElementById('polar-fields-absolute-start');
+  
+  // Início X/Y sempre visíveis no modo absoluto
+  if (absStartFields) absStartFields.style.display = 'block';
+
   if (ui.polarInputMode === 'polar') {
     if (polarFields) polarFields.style.display = 'block';
     if (absFields) absFields.style.display = 'none';
@@ -3631,7 +3647,7 @@ function showPolarHud(origin) {
     if (absFields) absFields.style.display = 'block';
   }
 
-  // Limpa valores dos inputs
+  // Limpa valores dos inputs de final/dist/ângulo (mantém início se já preenchido)
   document.getElementById('polar-dist-input').value = '';
   document.getElementById('polar-angle-input').value = '0';
   document.getElementById('polar-end-x-input').value = '';
@@ -3642,13 +3658,15 @@ function showPolarHud(origin) {
 }
 
 function updatePolarHud() {
+  // Se não tem origem definida, não atualiza campos de final/dist/ângulo baseado no mouse
+  // (o usuário pode estar digitando as coordenadas manualmente)
   if (!ui.lineStart) return;
 
   // Atualiza o select se mudou (proteção)
   const modeSel = document.getElementById('polar-mode-select');
   if (modeSel && modeSel.value !== ui.polarInputMode) {
     ui.polarInputMode = modeSel.value;
-    showPolarHud(ui.lineStart); // re-renderiza os campos
+    showPolarHud(ui.lineStart);
     return;
   }
 
@@ -3773,9 +3791,18 @@ function commitCircleHud() {
 }
 
 function commitLineHud() {
-  if (!ui.lineStart) return;
+  let startX, startY, endX, endY;
 
-  let endX, endY;
+  if (!ui.lineStart) {
+    // Primeira vez: lê Início X/Y dos inputs
+    startX = parseFloat(document.getElementById('polar-start-x-input').value);
+    startY = parseFloat(document.getElementById('polar-start-y-input').value);
+    if (isNaN(startX) || isNaN(startY)) { toast('Coordenadas de início inválidas', 'warn'); return; }
+    ui.lineStart = { x: startX, y: startY };
+  } else {
+    startX = ui.lineStart.x;
+    startY = ui.lineStart.y;
+  }
 
   if (ui.polarInputMode === 'polar') {
     const dist  = parseFloat(document.getElementById('polar-dist-input').value);
@@ -3783,18 +3810,18 @@ function commitLineHud() {
     if (isNaN(dist) || dist <= 0) { toast('Distância inválida', 'warn'); return; }
 
     const rad  = angle * Math.PI / 180;
-    endX = ui.lineStart.x + dist * Math.cos(rad);
-    endY = ui.lineStart.y - dist * Math.sin(rad);
+    endX = startX + dist * Math.cos(rad);
+    endY = startY - dist * Math.sin(rad);
   } else {
     endX = parseFloat(document.getElementById('polar-end-x-input').value);
     endY = parseFloat(document.getElementById('polar-end-y-input').value);
-    if (isNaN(endX) || isNaN(endY)) { toast('Coordenadas inválidas', 'warn'); return; }
+    if (isNaN(endX) || isNaN(endY)) { toast('Coordenadas de final inválidas', 'warn'); return; }
   }
 
-  commitLine(ui.lineStart, { x: endX, y: endY });
+  commitLine({ x: startX, y: startY }, { x: endX, y: endY });
   ui.lineStart = { x: endX, y: endY };
 
-  // Limpa campos do HUD
+  // Limpa campos do HUD (mantém Início X/Y para próxima linha contígua)
   document.getElementById('polar-dist-input').value  = '';
   document.getElementById('polar-angle-input').value = '0';
   document.getElementById('polar-end-x-input').value = '';
@@ -4507,16 +4534,35 @@ document.getElementById('angle-step-input').addEventListener('change', () => {
 function polarHudTabCycle(e, forward) {
   e.preventDefault();
   const mode = ui.polarInputMode;
+  let fields;
   if (mode === 'polar') {
-    const first = document.getElementById('polar-dist-input');
-    const second = document.getElementById('polar-angle-input');
-    if (forward) { second.focus(); } else { first.focus(); }
+    fields = [
+      document.getElementById('polar-start-x-input'),
+      document.getElementById('polar-start-y-input'),
+      document.getElementById('polar-dist-input'),
+      document.getElementById('polar-angle-input'),
+    ];
   } else {
-    const first = document.getElementById('polar-end-x-input');
-    const second = document.getElementById('polar-end-y-input');
-    if (forward) { second.focus(); } else { first.focus(); }
+    fields = [
+      document.getElementById('polar-start-x-input'),
+      document.getElementById('polar-start-y-input'),
+      document.getElementById('polar-end-x-input'),
+      document.getElementById('polar-end-y-input'),
+    ];
+  }
+  const active = document.activeElement;
+  const idx = fields.findIndex(f => f === active);
+  if (idx >= 0) {
+    const nextIdx = forward ? (idx + 1) % fields.length : (idx - 1 + fields.length) % fields.length;
+    fields[nextIdx].focus();
   }
 }
+document.getElementById('polar-start-x-input').addEventListener('keydown', e => {
+  if (e.key === 'Tab') { polarHudTabCycle(e, !e.shiftKey); }
+});
+document.getElementById('polar-start-y-input').addEventListener('keydown', e => {
+  if (e.key === 'Tab') { polarHudTabCycle(e, !e.shiftKey); }
+});
 document.getElementById('polar-dist-input').addEventListener('keydown', e => {
   if (e.key === 'Tab') { polarHudTabCycle(e, !e.shiftKey); }
 });
@@ -4556,7 +4602,7 @@ document.getElementById('circle-mode-select').addEventListener('keydown', e => {
 });
 
 // Polar HUD - Enter/Escape
-['polar-dist-input', 'polar-angle-input', 'polar-end-x-input', 'polar-end-y-input'].forEach(id => {
+['polar-start-x-input', 'polar-start-y-input', 'polar-dist-input', 'polar-angle-input', 'polar-end-x-input', 'polar-end-y-input'].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); commitPolarHud(); }
