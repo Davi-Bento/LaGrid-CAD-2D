@@ -469,6 +469,7 @@ select.hud-input {
 #spiral-hud .hud-row + .hud-row { margin-top: 5px; }
 #spiral-hud .hud-label { min-width: 106px; }
 #spiral-hud .hud-input { padding: 4px 8px; font-size: 12px; }
+#spiral-hud .hud-check { width: 15px; height: 15px; accent-color: var(--accent); cursor: pointer; }
 #spiral-hud .hud-actions { margin-top: 8px; }
 #spiral-hud .hud-hint { margin-top: 5px; }
 #spiral-info { color: var(--accent); }

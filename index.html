@@ -381,7 +381,11 @@
         <input type="number" id="spiral-cy" class="hud-input" step="0.1" placeholder="0.0" />
       </div>
       <div class="hud-row">
-        <label class="hud-label" for="spiral-r1">Raio inicial R1 (cm)</label>
+        <label class="hud-label" for="spiral-center-start">Começar no centro</label>
+        <input type="checkbox" id="spiral-center-start" class="hud-check" />
+      </div>
+      <div class="hud-row">
+        <label class="hud-label" for="spiral-r1" id="spiral-r1-label">Raio inicial R1 (cm)</label>
         <input type="number" id="spiral-r1" class="hud-input" value="2.5" step="0.1" min="0.01" />
       </div>
       <div class="hud-row">
@@ -420,7 +424,7 @@
         <button id="spiral-confirm-btn" class="hud-btn primary">Aplicar ↵</button>
       </div>
       <div class="hud-hint" id="spiral-info">…</div>
-      <div class="hud-hint">Clique no canvas para definir a referência · Cauda sempre em pé ou deitada · Use ângulo inicial múltiplo de 90° para manter a tangência</div>
+      <div class="hud-hint">Clique no canvas para definir a referência · Cauda em pé/deitada · "Começar no centro" usa R1 como raio externo</div>
     </div>
 
     <!-- HUD Mover Precisão -->

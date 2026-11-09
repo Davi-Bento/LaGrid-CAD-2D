@@ -813,6 +813,7 @@ function spiralInput(id, def) {
 function readSpiralParams() {
   const dirEl = document.getElementById('spiral-dir');
   const anchorEl = document.getElementById('spiral-anchor');
+  const centerEl = document.getElementById('spiral-center-start');
   const count = Math.max(1, Math.min(2000, Math.round(spiralInput('spiral-count', 60))));
   let subdiv = Math.max(1, Math.min(20, Math.round(spiralInput('spiral-subdiv', 4))));
   // Limite de segurança: no máximo 8000 segmentos por espiral
@@ -820,6 +821,7 @@ function readSpiralParams() {
   return {
     anchorPoint: (ui.spiralAnchorSet && ui.spiralAnchor) ? { ...ui.spiralAnchor } : { ...ui.mouseWorld },
     anchor:      anchorEl ? anchorEl.value : 'center',
+    centerStart: !!(centerEl && centerEl.checked),
     r1:          spiralInput('spiral-r1', 2.5),
     stepAngle:   spiralInput('spiral-angle', ANGLE_STEP_DEFAULT),
     factor:      spiralInput('spiral-factor', 1.017),
@@ -833,7 +835,8 @@ function readSpiralParams() {
 
 // Gera a espiral em coordenadas locais (centro na origem). Ângulos seguem a
 // convenção do resto do editor: 0° = direita, 90° = cima, anti-horário.
-// Posiciona o ponto de referência escolhido sobre `anchorPoint`.
+// Com `centerStart`, a espiral nasce no centro (raio 0) e cresce até o raio
+// externo; sem ele, começa no raio R1.
 function buildSpiralPoints(anchorPoint, p) {
   const startRad = p.startAngle * Math.PI / 180;
   const stepRad  = p.stepAngle  * Math.PI / 180;
@@ -841,10 +844,21 @@ function buildSpiralPoints(anchorPoint, p) {
   const dStep    = stepRad / sub;
   const dFactor  = Math.pow(p.factor, 1 / sub);
   const n        = p.count * sub;
+  const dN       = Math.pow(dFactor, n);
+  const qInvN    = 1 / dN;
+
+  // Raio externo: com início no centro, R1 já é o raio externo.
+  const rOut = p.centerStart ? p.r1 : p.r1 * Math.pow(p.factor, p.count);
 
   const local = [];
   for (let i = 0; i <= n; i++) {
-    const r = p.r1 * Math.pow(dFactor, i);
+    let r;
+    if (p.centerStart) {
+      // Curva exponencial deslocada: r(0) = 0 e r(n) = rOut.
+      r = i === 0 ? 0 : rOut * (Math.pow(dFactor, i - n) - qInvN) / (1 - qInvN);
+    } else {
+      r = p.r1 * Math.pow(dFactor, i);
+    }
     const a = startRad - p.dir * i * dStep;   // dir=1 = horário visual
     local.push({ x: r * Math.cos(a), y: -r * Math.sin(a) });
   }
@@ -903,10 +917,17 @@ function hideSpiralHud() {
   if (hud) hud.classList.add('hidden');
 }
 
+function updateSpiralR1Label() {
+  const cb = document.getElementById('spiral-center-start');
+  const label = document.getElementById('spiral-r1-label');
+  if (label) label.textContent = (cb && cb.checked) ? 'Raio externo (cm)' : 'Raio inicial R1 (cm)';
+}
+
 function updateSpiralInfo() {
   const p = readSpiralParams();
   const turns = (p.count * p.stepAngle) / 360;
-  const rEnd  = p.r1 * Math.pow(p.factor, p.count);
+  const rEnd  = p.centerStart ? p.r1 : p.r1 * Math.pow(p.factor, p.count);
+  updateSpiralR1Label();
   const anchorNames = { center: 'Centro', start: 'Início', tail: 'Cauda' };
   const base = anchorNames[p.anchor] || 'Centro';
   const cxLabel = document.getElementById('spiral-cx-label');
@@ -917,7 +938,7 @@ function updateSpiralInfo() {
   if (!info) return;
   const total = p.count * p.subdiv + 1 + (p.tail > 0 ? 1 : 0);
   info.textContent =
-    `${turns.toFixed(2)} volta(s) · raio final ${Number.isFinite(rEnd) ? rEnd.toFixed(2) : '—'} cm · ${total} pontos`;
+    `${p.centerStart ? 'início no centro · ' : ''}${turns.toFixed(2)} volta(s) · raio externo ${Number.isFinite(rEnd) ? rEnd.toFixed(2) : '—'} cm · ${total} pontos`;
 }
 
 function spiralClick(wx, wy) {
@@ -4653,7 +4674,7 @@ function saveJSON() {
     spiral: {
       r1: sp.r1, angle: sp.stepAngle, factor: sp.factor,
       count: sp.count, subdiv: sp.subdiv, start: sp.startAngle,
-      dir: sp.dir, tail: sp.tail, anchor: sp.anchor,
+      dir: sp.dir, tail: sp.tail, anchor: sp.anchor, centerStart: sp.centerStart,
     },
   }, null, 2);
   const a = document.createElement('a');
@@ -4727,6 +4748,8 @@ function loadJSON(file) {
         if (dirEl && (sp.dir === 1 || sp.dir === -1)) dirEl.value = String(sp.dir);
         const anchorEl = document.getElementById('spiral-anchor');
         if (anchorEl && ['center', 'start', 'tail'].includes(sp.anchor)) anchorEl.value = sp.anchor;
+        const centerEl = document.getElementById('spiral-center-start');
+        if (centerEl) centerEl.checked = sp.centerStart === true;
         updateSpiralInfo();
       }
       // Normaliza a marcação de coordenadas de cada vértice.
@@ -5355,6 +5378,21 @@ document.getElementById('spiral-anchor').addEventListener('change', () => {
 });
 document.getElementById('spiral-anchor').addEventListener('keydown', e => {
   if (e.key === 'Escape') { hideSpiralHud(); setTool('select'); }
+});
+// Ao alternar "Começar no centro", R1 muda de raio inicial para raio externo.
+// Converte o valor para manter o tamanho da espiral.
+document.getElementById('spiral-center-start').addEventListener('change', () => {
+  const cb = document.getElementById('spiral-center-start');
+  const r1 = document.getElementById('spiral-r1');
+  const F  = Math.max(0.1, spiralInput('spiral-factor', 1.017));
+  const N  = Math.max(1, Math.min(2000, Math.round(spiralInput('spiral-count', 60))));
+  const scale = Math.pow(F, N);
+  const v = parseFloat(r1.value);
+  if (Number.isFinite(v) && v > 0) {
+    r1.value = (cb.checked ? v * scale : v / scale).toFixed(2);
+  }
+  updateSpiralInfo();
+  render();
 });
 
 // Polar HUD - Enter/Escape
