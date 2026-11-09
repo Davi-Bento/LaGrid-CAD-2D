@@ -99,6 +99,11 @@ function getAllEndpoints() {
       const v = verts[i];
       pts.push({ x: v.x, y: v.y, segId: seg.id, idx: i });
     }
+    // Centro do círculo/arco-aparado (referência para coordenadas/snap)
+    if (seg.type === 'circle' || seg.originalCircle) {
+      const center = seg.type === 'circle' ? seg.points[0] : seg.originalCircle.c;
+      pts.push({ x: center.x, y: center.y, segId: seg.id, idx: -1, isCenter: true });
+    }
     // Pontos N/L/S/O dos círculos (ímãs para iniciar linhas, arcos, cortes etc.)
     if (seg.type === 'circle' && state.showCircleQuads) {
       circleQuadrantPoints(seg).forEach((q, i) => {
@@ -172,6 +177,7 @@ const CIRCLE_SIDE_ORDER = ['E', 'N', 'W', 'S'];
 function circleQuadrantPoints(seg) {
   if (!seg || seg.type !== 'circle' || !seg.points || !seg.points[0]) return [];
   const c = seg.points[0], r = seg.radius || 0;
+  if (r <= 0) return [];
   return CIRCLE_SIDE_ORDER.map(side => ({
     side,
     x: c.x + CIRCLE_SIDES[side].dx * r,
@@ -1288,7 +1294,10 @@ function trimCircle(target, wx, wy) {
     if (!cuts.length || Math.abs(it.t - cuts[cuts.length-1].t) > 1e-4) cuts.push(it);
   }
   if (cuts.length < 2) {
-    setStatus('Círculo precisa de 2 interseções para aparar');
+    saveUndo();
+    state.segments = state.segments.filter(s => s.id !== target.id);
+    refreshAfterEdit();
+    toast('Círculo apagado (sem interseções válidas para aparar)', 'warn');
     return;
   }
   const tc = closestPointOnSeg(target, wx, wy).t;
@@ -1304,7 +1313,13 @@ function trimCircle(target, wx, wy) {
   const hi = idx === last ? cuts[0].t + 1 : cuts[idx+1].t;
   const startT = hi % 1;
   const sweepKeep = lo + 1 - hi;
-  if (sweepKeep < 1e-4) { setStatus('Trecho resultante muito pequeno'); return; }
+  if (sweepKeep < 1e-4) {
+    saveUndo();
+    state.segments = state.segments.filter(s => s.id !== target.id);
+    refreshAfterEdit();
+    toast('Círculo apagado (trecho resultante muito pequeno)', 'warn');
+    return;
+  }
 
   saveUndo();
   const at = t => {
@@ -1313,6 +1328,8 @@ function trimCircle(target, wx, wy) {
   };
   target.type = 'arc';
   target.points = [ at(startT), at(startT + sweepKeep/2), at(startT + sweepKeep) ];
+  // Preserva informações do círculo original (AutoCAD-like)
+  target.originalCircle = { c: { ...c }, r };
   delete target.radius;
   reattachNodes([target.id]);
   refreshAfterEdit();
@@ -1325,7 +1342,16 @@ function trimClick(wx, wy) {
   if (target.type === 'circle') { trimCircle(target, wx, wy); return; }
 
   const cuts = targetIntersections(target);
-  if (!cuts.length) { setStatus('Nenhuma interseção encontrada para aparar'); return; }
+  
+  // Se não há interseções, apaga o objeto
+  if (!cuts.length) {
+    saveUndo();
+    state.segments = state.segments.filter(s => s.id !== target.id);
+    refreshAfterEdit();
+    toast('Objeto apagado (sem interseção para aparar)', 'warn');
+    return;
+  }
+
   const tc = closestPointOnSeg(target, wx, wy).t;
   const bounds = [0, ...cuts.map(c => c.t), 1].sort((a,b) => a-b);
   let j = -1;
@@ -1338,11 +1364,16 @@ function trimClick(wx, wy) {
 
   const arcLike = target.type === 'arc';
   saveUndo();
+  
+  // Comportamento original: remove o trecho clicado, mantém o(s) restante(s)
   if (lo <= 1e-4) {
+    // Clicou no primeiro trecho (início até 1ª interseção) -> mantém do hi até fim
     assignPiece(target, subSegmentPoints(target, hi, 1));
   } else if (hi >= 1 - 1e-4) {
+    // Clicou no último trecho (última interseção até fim) -> mantém do início até lo
     assignPiece(target, subSegmentPoints(target, 0, lo));
   } else {
+    // Clicou no meio -> divide em dois (mantém início-lo e hi-fim)
     const keep = subSegmentPoints(target, 0, lo);
     const rest = subSegmentPoints(target, hi, 1);
     assignPiece(target, keep);
@@ -1841,6 +1872,7 @@ function applyScale() {
       p.y = c.y + (p.y-c.y)*factor;
     });
     if (seg.type === 'circle') seg.radius *= factor;
+    if (seg.originalCircle) seg.originalCircle.r *= factor;
   }
   transformAttachedNodes(p => ({
     x: c.x + (p.x-c.x)*factor,
@@ -2629,6 +2661,27 @@ function drawEndpoints(seg, sel) {
     ctx.fillStyle = sel ? '#ffffff' : '#4a9eff';
     ctx.fill();
   });
+
+  // Desenha o centro do círculo original para arcos aparados (referência de construção)
+  if (seg.type === 'arc' && seg.originalCircle) {
+    const center = seg.originalCircle.c;
+    const sp = w2s(center.x, center.y);
+    // Cruz central (estilo AutoCAD center mark)
+    const size = sel ? 8 : 6;
+    ctx.beginPath();
+    ctx.moveTo(sp.x - size, sp.y);
+    ctx.lineTo(sp.x + size, sp.y);
+    ctx.moveTo(sp.x, sp.y - size);
+    ctx.lineTo(sp.x, sp.y + size);
+    ctx.strokeStyle = sel ? '#ffffff' : 'rgba(255,224,102,0.8)';
+    ctx.lineWidth = sel ? 1.5 : 1;
+    ctx.stroke();
+    // Ponto central
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y, 2, 0, Math.PI*2);
+    ctx.fillStyle = sel ? '#ffffff' : '#ffe066';
+    ctx.fill();
+  }
 }
 
 // ── QUADRANTES VISÍVEIS DOS CÍRCULOS (N/L/S/O) ────────────
@@ -2638,7 +2691,8 @@ function drawCircleQuadrants() {
 
   for (const seg of state.segments) {
     if (seg.type !== 'circle') continue;
-    if (cm2px(seg.radius || 0) < 4) continue;
+    const r = seg.radius || (seg.originalCircle ? seg.originalCircle.r : 0);
+    if (cm2px(r) < 4) continue;
     for (const q of circleQuadrantPoints(seg)) {
       const sp = w2s(q.x, q.y);
       const active = q.side === activeSide;
@@ -3463,6 +3517,33 @@ function onKeyDown(e) {
     return;
   }
 
+  // Se HUD da linha está aberto e nenhum input focado, direciona números para o input apropriado
+  const lineHudOpen = !document.getElementById('polar-hud').classList.contains('hidden');
+  if (lineHudOpen && !inInput && /^[0-9.,]$/.test(e.key)) {
+    let targetInput;
+    if (ui.polarInputMode === 'polar') {
+      targetInput = document.getElementById('polar-dist-input');
+    } else {
+      // Modo absoluto: se não tem início definido, foca no Início X, senão no Final X
+      targetInput = ui.lineStart ? document.getElementById('polar-end-x-input') : document.getElementById('polar-start-x-input');
+    }
+    if (targetInput) {
+      e.preventDefault();
+      // Reset na primeira digitação
+      if (!targetInput.dataset.typing) {
+        targetInput.value = '';
+        targetInput.dataset.typing = 'true';
+      }
+      targetInput.focus();
+      const cursorPos = targetInput.selectionStart;
+      const val = targetInput.value;
+      targetInput.value = val.slice(0, cursorPos) + e.key + val.slice(cursorPos);
+      targetInput.setSelectionRange(cursorPos + 1, cursorPos + 1);
+      targetInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    return;
+  }
+
   // Se HUD do círculo está aberto e nenhum input focado, direciona números para o input de diâmetro
   const circleHudOpen = !document.getElementById('circle-hud').classList.contains('hidden');
   if (circleHudOpen && !inInput && /^[0-9.,]$/.test(e.key)) {
@@ -3471,13 +3552,16 @@ function onKeyDown(e) {
       : document.getElementById('circle-diameter-input-side');
     if (diameterInput) {
       e.preventDefault();
+      // Reset na primeira digitação
+      if (!diameterInput.dataset.typing) {
+        diameterInput.value = '';
+        diameterInput.dataset.typing = 'true';
+      }
       diameterInput.focus();
-      // Insere o dígito digitado
       const cursorPos = diameterInput.selectionStart;
       const val = diameterInput.value;
       diameterInput.value = val.slice(0, cursorPos) + e.key + val.slice(cursorPos);
       diameterInput.setSelectionRange(cursorPos + 1, cursorPos + 1);
-      // Dispara input event para atualizar UI
       diameterInput.dispatchEvent(new Event('input', { bubbles: true }));
     }
     return;
@@ -3670,6 +3754,14 @@ function showPolarHud(origin) {
   document.getElementById('polar-end-x-input').value = '';
   document.getElementById('polar-end-y-input').value = '';
 
+  // Reseta estado de digitação para todos os inputs
+  document.getElementById('polar-start-x-input').dataset.typing = '';
+  document.getElementById('polar-start-y-input').dataset.typing = '';
+  document.getElementById('polar-dist-input').dataset.typing = '';
+  document.getElementById('polar-angle-input').dataset.typing = '';
+  document.getElementById('polar-end-x-input').dataset.typing = '';
+  document.getElementById('polar-end-y-input').dataset.typing = '';
+
   document.getElementById('polar-hud').classList.remove('hidden');
   // NÃO foca automaticamente para permitir Tab no canvas
 }
@@ -3706,6 +3798,14 @@ function updatePolarHud() {
 }
 
 function hidePolarHud() {
+  // Reseta estado de digitação para todos os inputs ao esconder
+  document.getElementById('polar-start-x-input').dataset.typing = '';
+  document.getElementById('polar-start-y-input').dataset.typing = '';
+  document.getElementById('polar-dist-input').dataset.typing = '';
+  document.getElementById('polar-angle-input').dataset.typing = '';
+  document.getElementById('polar-end-x-input').dataset.typing = '';
+  document.getElementById('polar-end-y-input').dataset.typing = '';
+
   document.getElementById('polar-hud').classList.add('hidden');
 }
 
@@ -3719,6 +3819,14 @@ function showCircleHud() {
     document.getElementById('circle-start-x-input').value = ui.mouseWorld.x.toFixed(2);
     document.getElementById('circle-start-y-input').value = ui.mouseWorld.y.toFixed(2);
   }
+  // Reseta estado de digitação para todos os inputs
+  document.getElementById('circle-diameter-input').dataset.typing = '';
+  document.getElementById('circle-cx-input').dataset.typing = '';
+  document.getElementById('circle-cy-input').dataset.typing = '';
+  document.getElementById('circle-diameter-input-side').dataset.typing = '';
+  document.getElementById('circle-start-x-input').dataset.typing = '';
+  document.getElementById('circle-start-y-input').dataset.typing = '';
+
   // Auto-foca no input de Diâmetro (modo centro é o padrão)
   setTimeout(() => {
     const diameterInput = document.getElementById('circle-diameter-input');
@@ -3727,6 +3835,14 @@ function showCircleHud() {
 }
 
 function hideCircleHud() {
+  // Reseta estado de digitação para todos os inputs ao esconder
+  document.getElementById('circle-diameter-input').dataset.typing = '';
+  document.getElementById('circle-cx-input').dataset.typing = '';
+  document.getElementById('circle-cy-input').dataset.typing = '';
+  document.getElementById('circle-diameter-input-side').dataset.typing = '';
+  document.getElementById('circle-start-x-input').dataset.typing = '';
+  document.getElementById('circle-start-y-input').dataset.typing = '';
+
   document.getElementById('circle-hud').classList.add('hidden');
 }
 
@@ -3743,11 +3859,11 @@ function updateCircleHud() {
       const r = Math.hypot(ui.mouseWorld.x - ui.circleCenter.x, ui.mouseWorld.y - ui.circleCenter.y);
       const diameter = r * 2;
       const dIn = document.getElementById('circle-diameter-input');
-      if (dIn && document.activeElement !== dIn) dIn.value = diameter.toFixed(2);
+      if (dIn && document.activeElement !== dIn && !dIn.dataset.typing) dIn.value = diameter.toFixed(2);
       const cxIn = document.getElementById('circle-cx-input');
-      if (cxIn && document.activeElement !== cxIn) cxIn.value = ui.circleCenter.x.toFixed(2);
+      if (cxIn && document.activeElement !== cxIn && !cxIn.dataset.typing) cxIn.value = ui.circleCenter.x.toFixed(2);
       const cyIn = document.getElementById('circle-cy-input');
-      if (cyIn && document.activeElement !== cyIn) cyIn.value = ui.circleCenter.y.toFixed(2);
+      if (cyIn && document.activeElement !== cyIn && !cyIn.dataset.typing) cyIn.value = ui.circleCenter.y.toFixed(2);
     }
   } else {
     if (centerFields) centerFields.style.display = 'none';
@@ -3761,12 +3877,12 @@ function updateCircleHud() {
       const diameter = Math.abs((pt.x - start.x) * s.dx + (pt.y - start.y) * s.dy);
       const r = diameter / 2;
       const center = pointOnCircleSide(start, r, ui.circleSide);
-      const dIn = document.getElementById('circle-diameter-input');
-      if (dIn && document.activeElement !== dIn) dIn.value = diameter.toFixed(2);
+      const dIn = document.getElementById('circle-diameter-input-side');
+      if (dIn && document.activeElement !== dIn && !dIn.dataset.typing) dIn.value = diameter.toFixed(2);
       const sxIn = document.getElementById('circle-start-x-input');
-      if (sxIn && document.activeElement !== sxIn) sxIn.value = start.x.toFixed(2);
+      if (sxIn && document.activeElement !== sxIn && !sxIn.dataset.typing) sxIn.value = start.x.toFixed(2);
       const syIn = document.getElementById('circle-start-y-input');
-      if (syIn && document.activeElement !== syIn) syIn.value = start.y.toFixed(2);
+      if (syIn && document.activeElement !== syIn && !syIn.dataset.typing) syIn.value = start.y.toFixed(2);
     }
   }
 }
@@ -3787,8 +3903,9 @@ function commitCircleHud() {
     updatePanelInfo();
     render();
     toast(`Círculo Ø${diameter.toFixed(2)} cm (R${r.toFixed(2)} cm) em (${cx.toFixed(2)}, ${cy.toFixed(2)})`);
-    // Prepara para próximo círculo
+    // Prepara para próximo círculo e reseta estado de digitação
     document.getElementById('circle-diameter-input').value = '';
+    document.getElementById('circle-diameter-input').dataset.typing = '';
     document.getElementById('circle-diameter-input').focus();
   } else {
     const diameter = parseFloat(document.getElementById('circle-diameter-input-side').value);
@@ -3808,7 +3925,9 @@ function commitCircleHud() {
     updatePanelInfo();
     render();
     toast(`Círculo Ø${diameter.toFixed(2)} cm (R${r.toFixed(2)} cm) · centro para ${CIRCLE_SIDES[side].label}`);
+    // Prepara para próximo círculo e reseta estado de digitação
     document.getElementById('circle-diameter-input-side').value = '';
+    document.getElementById('circle-diameter-input-side').dataset.typing = '';
     document.getElementById('circle-diameter-input-side').focus();
   }
 }
@@ -3844,11 +3963,18 @@ function commitLineHud() {
   commitLine({ x: startX, y: startY }, { x: endX, y: endY });
   ui.lineStart = { x: endX, y: endY };
 
-  // Limpa campos do HUD (mantém Início X/Y para próxima linha contígua)
+  // Limpa campos do HUD (mantém Início X/Y para próxima linha contígua) e reseta estado de digitação
   document.getElementById('polar-dist-input').value  = '';
   document.getElementById('polar-angle-input').value = '0';
   document.getElementById('polar-end-x-input').value = '';
   document.getElementById('polar-end-y-input').value = '';
+
+  document.getElementById('polar-dist-input').dataset.typing = '';
+  document.getElementById('polar-angle-input').dataset.typing = '';
+  document.getElementById('polar-end-x-input').dataset.typing = '';
+  document.getElementById('polar-end-y-input').dataset.typing = '';
+  document.getElementById('polar-start-x-input').dataset.typing = '';
+  document.getElementById('polar-start-y-input').dataset.typing = '';
 
   // Atualiza o HUD com o novo ponto de início
   showPolarHud(ui.lineStart);
