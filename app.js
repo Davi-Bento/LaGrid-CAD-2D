@@ -3463,6 +3463,26 @@ function onKeyDown(e) {
     return;
   }
 
+  // Se HUD do círculo está aberto e nenhum input focado, direciona números para o input de diâmetro
+  const circleHudOpen = !document.getElementById('circle-hud').classList.contains('hidden');
+  if (circleHudOpen && !inInput && /^[0-9.,]$/.test(e.key)) {
+    const diameterInput = ui.circleMode === 'center' 
+      ? document.getElementById('circle-diameter-input')
+      : document.getElementById('circle-diameter-input-side');
+    if (diameterInput) {
+      e.preventDefault();
+      diameterInput.focus();
+      // Insere o dígito digitado
+      const cursorPos = diameterInput.selectionStart;
+      const val = diameterInput.value;
+      diameterInput.value = val.slice(0, cursorPos) + e.key + val.slice(cursorPos);
+      diameterInput.setSelectionRange(cursorPos + 1, cursorPos + 1);
+      // Dispara input event para atualizar UI
+      diameterInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    return;
+  }
+
   // Tab na ferramenta Círculo alterna entre iniciar pelo centro e pela borda (4 lados)
   // Funciona mesmo com HUD aberto (antes do early return de inInput)
   if (e.key === 'Tab' && ui.tool === 'circle' && !e.ctrlKey && !e.metaKey) {
@@ -3699,10 +3719,10 @@ function showCircleHud() {
     document.getElementById('circle-start-x-input').value = ui.mouseWorld.x.toFixed(2);
     document.getElementById('circle-start-y-input').value = ui.mouseWorld.y.toFixed(2);
   }
-  // Auto-foca no input de Raio (modo centro é o padrão)
+  // Auto-foca no input de Diâmetro (modo centro é o padrão)
   setTimeout(() => {
-    const radiusInput = document.getElementById('circle-radius-input');
-    if (radiusInput) radiusInput.focus();
+    const diameterInput = document.getElementById('circle-diameter-input');
+    if (diameterInput) diameterInput.focus();
   }, 30);
 }
 
@@ -3721,8 +3741,9 @@ function updateCircleHud() {
     if (sideFields) sideFields.style.display = 'none';
     if (ui.circleCenter) {
       const r = Math.hypot(ui.mouseWorld.x - ui.circleCenter.x, ui.mouseWorld.y - ui.circleCenter.y);
-      const rIn = document.getElementById('circle-radius-input');
-      if (rIn && document.activeElement !== rIn) rIn.value = r.toFixed(2);
+      const diameter = r * 2;
+      const dIn = document.getElementById('circle-diameter-input');
+      if (dIn && document.activeElement !== dIn) dIn.value = diameter.toFixed(2);
       const cxIn = document.getElementById('circle-cx-input');
       if (cxIn && document.activeElement !== cxIn) cxIn.value = ui.circleCenter.x.toFixed(2);
       const cyIn = document.getElementById('circle-cy-input');
@@ -3753,10 +3774,11 @@ function updateCircleHud() {
 function commitCircleHud() {
   const mode = document.getElementById('circle-mode-select').value;
   if (mode === 'center') {
-    const r = parseFloat(document.getElementById('circle-radius-input').value);
+    const diameter = parseFloat(document.getElementById('circle-diameter-input').value);
     const cx = parseFloat(document.getElementById('circle-cx-input').value);
     const cy = parseFloat(document.getElementById('circle-cy-input').value);
-    if (isNaN(r) || r <= 0) { toast('Raio inválido', 'warn'); return; }
+    const r = diameter / 2;
+    if (isNaN(diameter) || diameter <= 0) { toast('Diâmetro inválido', 'warn'); return; }
     if (isNaN(cx) || isNaN(cy)) { toast('Coordenadas do centro inválidas', 'warn'); return; }
     saveUndo();
     state.segments.push({ id: state.nextId++, type: 'circle',
@@ -3764,12 +3786,12 @@ function commitCircleHud() {
     state.dijkstraPath = [];
     updatePanelInfo();
     render();
-    toast(`Círculo R${r.toFixed(2)} cm em (${cx.toFixed(2)}, ${cy.toFixed(2)})`);
+    toast(`Círculo Ø${diameter.toFixed(2)} cm (R${r.toFixed(2)} cm) em (${cx.toFixed(2)}, ${cy.toFixed(2)})`);
     // Prepara para próximo círculo
-    document.getElementById('circle-radius-input').value = '';
-    document.getElementById('circle-radius-input').focus();
+    document.getElementById('circle-diameter-input').value = '';
+    document.getElementById('circle-diameter-input').focus();
   } else {
-    const diameter = parseFloat(document.getElementById('circle-diameter-input').value);
+    const diameter = parseFloat(document.getElementById('circle-diameter-input-side').value);
     const sx = parseFloat(document.getElementById('circle-start-x-input').value);
     const sy = parseFloat(document.getElementById('circle-start-y-input').value);
     const side = document.getElementById('circle-side-select').value;
@@ -3786,8 +3808,8 @@ function commitCircleHud() {
     updatePanelInfo();
     render();
     toast(`Círculo Ø${diameter.toFixed(2)} cm (R${r.toFixed(2)} cm) · centro para ${CIRCLE_SIDES[side].label}`);
-    document.getElementById('circle-diameter-input').value = '';
-    document.getElementById('circle-diameter-input').focus();
+    document.getElementById('circle-diameter-input-side').value = '';
+    document.getElementById('circle-diameter-input-side').focus();
   }
 }
 
@@ -4590,8 +4612,8 @@ document.getElementById('move-angle-input').addEventListener('keydown', e => {
 });
 
 // Circle HUD - Enter/Escape e Tab entre campos
-['circle-radius-input', 'circle-cx-input', 'circle-cy-input',
- 'circle-diameter-input', 'circle-start-x-input', 'circle-start-y-input'].forEach(id => {
+['circle-diameter-input', 'circle-cx-input', 'circle-cy-input',
+ 'circle-diameter-input-side', 'circle-start-x-input', 'circle-start-y-input'].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); commitCircleHud(); }
