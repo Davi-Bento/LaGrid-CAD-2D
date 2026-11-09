@@ -66,6 +66,7 @@ const ui = {
   circleMode:   'center', // 'center' | 'side' (Tab alterna)
   circleSide:   'E',      // lado do centro em relação ao início: E/N/W/S
   spiralAnchor: null,     // ponto de referência da espiral em construção
+  spiralAnchorSet: false, // true depois de clicar/digitar a referência
   polarInputMode: 'polar', // 'polar' | 'absolute' — modo de entrada do HUD polar
   prevMouseScreen:  null,
   dragMove:     null,   // arrasto de objetos selecionados { ids, originals, nodeOriginals, start, moved }
@@ -530,6 +531,7 @@ function setTool(tool) {
   ui.rectStart    = null;
   ui.circleCenter = null;
   ui.spiralAnchor = null;
+  ui.spiralAnchorSet = false;
   ui.dragVertex   = null;
   ui.mirrorPts    = [];
   ui.offsetTargetId = null;
@@ -593,7 +595,7 @@ function setTool(tool) {
   if (tool === 'extend') setStatus('Clique perto da extremidade que deseja estender');
   if (tool === 'vertex-edit') setStatus('Clique no selo "E" (ou Ctrl+clique) para marcar/desmarcar coordenada · Alt+clique remove');
   if (tool === 'circle') setStatus(circleStatusText());
-  if (tool === 'spiral') setStatus('Clique para definir o centro · ajuste R1, A, F e N · Enter aplica');
+  if (tool === 'spiral') setStatus('Clique para definir a referência · ajuste R1, A, F e N · Enter aplica');
   render();
 }
 
@@ -816,7 +818,7 @@ function readSpiralParams() {
   // Limite de segurança: no máximo 8000 segmentos por espiral
   if (count * subdiv > 8000) subdiv = Math.max(1, Math.floor(8000 / count));
   return {
-    anchorPoint: ui.spiralAnchor ? { ...ui.spiralAnchor } : { ...ui.mouseWorld },
+    anchorPoint: (ui.spiralAnchorSet && ui.spiralAnchor) ? { ...ui.spiralAnchor } : { ...ui.mouseWorld },
     anchor:      anchorEl ? anchorEl.value : 'center',
     r1:          spiralInput('spiral-r1', 2.5),
     stepAngle:   spiralInput('spiral-angle', ANGLE_STEP_DEFAULT),
@@ -829,8 +831,9 @@ function readSpiralParams() {
   };
 }
 
-// Gera a espiral em coordenadas locais (centro na origem), posiciona o ponto
-// de referência escolhido sobre `anchorPoint` e devolve também o centro final.
+// Gera a espiral em coordenadas locais (centro na origem). Ângulos seguem a
+// convenção do resto do editor: 0° = direita, 90° = cima, anti-horário.
+// Posiciona o ponto de referência escolhido sobre `anchorPoint`.
 function buildSpiralPoints(anchorPoint, p) {
   const startRad = p.startAngle * Math.PI / 180;
   const stepRad  = p.stepAngle  * Math.PI / 180;
@@ -842,8 +845,8 @@ function buildSpiralPoints(anchorPoint, p) {
   const local = [];
   for (let i = 0; i <= n; i++) {
     const r = p.r1 * Math.pow(dFactor, i);
-    const a = startRad + p.dir * i * dStep;
-    local.push({ x: r * Math.cos(a), y: r * Math.sin(a) });
+    const a = startRad - p.dir * i * dStep;   // dir=1 = horário visual
+    local.push({ x: r * Math.cos(a), y: -r * Math.sin(a) });
   }
 
   // Cauda tangente: prolonga o primeiro trecho na direção oposta ao sentido
@@ -859,12 +862,13 @@ function buildSpiralPoints(anchorPoint, p) {
     }
   }
 
-  // Ponto de referência que ficará sobre o ponto informado
+  // Ponto de referência que ficará sobre o ponto informado.
+  // Sem cauda, a ponta da cauda coincide com o início da espiral.
   let ref = { x: 0, y: 0 };
   if (p.anchor === 'start') {
     ref = local[0];
-  } else if (p.anchor === 'tail' && tailPt) {
-    ref = tailPt;
+  } else if (p.anchor === 'tail') {
+    ref = tailPt || local[0];
   }
 
   const dx = anchorPoint.x - ref.x;
@@ -872,7 +876,7 @@ function buildSpiralPoints(anchorPoint, p) {
   const pts = [];
   if (tailPt) pts.push({ x: tailPt.x + dx, y: tailPt.y + dy });
   for (const q of local) pts.push({ x: q.x + dx, y: q.y + dy });
-  return { points: pts, center: { x: dx, y: dy } };
+  return { points: pts, center: { x: dx, y: dy }, ref: { x: ref.x + dx, y: ref.y + dy } };
 }
 
 function syncSpiralAnchorInputs() {
@@ -915,6 +919,7 @@ function updateSpiralInfo() {
 
 function spiralClick(wx, wy) {
   ui.spiralAnchor = ui.snapTarget ? { ...ui.snapTarget } : { x: wx, y: wy };
+  ui.spiralAnchorSet = true;
   syncSpiralAnchorInputs();
   updateSpiralInfo();
   setStatus('Ponto de referência definido · ajuste os parâmetros e clique em Aplicar (ou Enter)');
@@ -3460,7 +3465,7 @@ function drawPreview() {
 
   if (ui.tool === 'spiral') {
     const p = readSpiralParams();
-    const { points: pts, center } = buildSpiralPoints(p.anchorPoint, p);
+    const { points: pts, center, ref } = buildSpiralPoints(p.anchorPoint, p);
     if (pts.length > 1) {
       ctx.save();
       ctx.setLineDash([5, 4]);
@@ -3477,13 +3482,22 @@ function drawPreview() {
       }
       ctx.stroke();
       ctx.setLineDash([]);
-      // Marca o centro da espiral
+      // Marca o centro (discreto) e o ponto de referência escolhido (destaque)
       const c = w2s(center.x, center.y);
-      ctx.strokeStyle = '#ffe066';
-      ctx.lineWidth   = 1;
+      ctx.fillStyle = 'rgba(255,255,255,0.35)';
       ctx.beginPath();
-      ctx.moveTo(c.x-6, c.y); ctx.lineTo(c.x+6, c.y);
-      ctx.moveTo(c.x, c.y-6); ctx.lineTo(c.x, c.y+6);
+      ctx.arc(c.x, c.y, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      const r0 = w2s(ref.x, ref.y);
+      ctx.strokeStyle = '#ffe066';
+      ctx.lineWidth   = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(r0.x-7, r0.y); ctx.lineTo(r0.x+7, r0.y);
+      ctx.moveTo(r0.x, r0.y-7); ctx.lineTo(r0.x, r0.y+7);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(r0.x, r0.y, 4, 0, Math.PI * 2);
       ctx.stroke();
       ctx.restore();
     }
@@ -3855,6 +3869,14 @@ function onMouseMove(e) {
   if (ui.tool === 'circle') updateCircleHud();
   // Atualiza HUD polar da linha em tempo real
   if (ui.tool === 'line' && ui.lineStart) updatePolarHud();
+  // Espiral: enquanto a referência não foi definida, ela segue o mouse
+  if (ui.tool === 'spiral' && !ui.spiralAnchorSet) {
+    const cxIn = document.getElementById('spiral-cx');
+    const cyIn = document.getElementById('spiral-cy');
+    if (cxIn && document.activeElement !== cxIn) cxIn.value = ui.mouseWorld.x.toFixed(2);
+    if (cyIn && document.activeElement !== cyIn) cyIn.value = ui.mouseWorld.y.toFixed(2);
+    updateSpiralInfo();
+  }
 
   // Status bar coordinate display
   const coordEl = document.getElementById('status-coord');
@@ -4175,6 +4197,7 @@ function cancelCurrentTool() {
   ui.circleMode   = 'center';
   ui.circleSide   = 'E';
   ui.spiralAnchor = null;
+  ui.spiralAnchorSet = false;
   ui.mirrorPts    = [];
   ui.dragVertex   = null;
   ui.offsetTargetId = null;
@@ -4756,6 +4779,7 @@ function newProject() {
   ui.rectStart    = null;
   ui.circleCenter = null;
   ui.spiralAnchor = null;
+  ui.spiralAnchorSet = false;
   ui.mirrorPts    = [];
   ui.dragVertex   = null;
   ui.offsetTargetId = null;
@@ -5302,7 +5326,10 @@ document.getElementById('spiral-cancel-btn').addEventListener('click', () => {
     if (id === 'spiral-cx' || id === 'spiral-cy') {
       const cx = parseFloat(document.getElementById('spiral-cx').value);
       const cy = parseFloat(document.getElementById('spiral-cy').value);
-      if (Number.isFinite(cx) && Number.isFinite(cy)) ui.spiralAnchor = { x: cx, y: cy };
+      if (Number.isFinite(cx) && Number.isFinite(cy)) {
+        ui.spiralAnchor = { x: cx, y: cy };
+        ui.spiralAnchorSet = true;
+      }
     }
     updateSpiralInfo();
     render();
