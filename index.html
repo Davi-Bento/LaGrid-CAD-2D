@@ -243,20 +243,51 @@
 
     <!-- HUD Linha — Distância e Ângulo (foco isolado) -->
     <div id="polar-hud" class="hud-panel hidden">
-      <div class="hud-title">ENTRADA POLAR</div>
+      <div class="hud-title">LINHA</div>
       <div class="hud-row">
-        <label class="hud-label" for="polar-dist-input">Dist (cm)</label>
-        <input type="number" id="polar-dist-input" class="hud-input" step="0.1" min="0" placeholder="0.0" />
+        <label class="hud-label" for="polar-mode-select">Modo Entrada</label>
+        <select id="polar-mode-select" class="hud-input">
+          <option value="polar">Distância/Ângulo</option>
+          <option value="absolute">Coordenadas Absolutas</option>
+        </select>
       </div>
+
       <div class="hud-row" style="margin-top:6px">
-        <label class="hud-label" for="polar-angle-input">Ângulo (°)</label>
-        <input type="number" id="polar-angle-input" class="hud-input" step="1" placeholder="0" />
+        <span class="hud-label">Início X (cm)</span>
+        <span id="polar-start-x" class="hud-val">--</span>
       </div>
+      <div class="hud-row">
+        <span class="hud-label">Início Y (cm)</span>
+        <span id="polar-start-y" class="hud-val">--</span>
+      </div>
+
+      <div id="polar-fields-polar">
+        <div class="hud-row" style="margin-top:6px">
+          <label class="hud-label" for="polar-dist-input">Dist (cm)</label>
+          <input type="number" id="polar-dist-input" class="hud-input" step="0.1" min="0" placeholder="0.0" />
+        </div>
+        <div class="hud-row" style="margin-top:6px">
+          <label class="hud-label" for="polar-angle-input">Ângulo (°)</label>
+          <input type="number" id="polar-angle-input" class="hud-input" step="1" placeholder="0" />
+        </div>
+      </div>
+
+      <div id="polar-fields-absolute" style="display:none;">
+        <div class="hud-row" style="margin-top:6px">
+          <label class="hud-label" for="polar-end-x-input">Final X (cm)</label>
+          <input type="number" id="polar-end-x-input" class="hud-input" step="0.1" placeholder="0.0" />
+        </div>
+        <div class="hud-row" style="margin-top:6px">
+          <label class="hud-label" for="polar-end-y-input">Final Y (cm)</label>
+          <input type="number" id="polar-end-y-input" class="hud-input" step="0.1" placeholder="0.0" />
+        </div>
+      </div>
+
       <div class="hud-actions">
         <button id="polar-cancel-btn" class="hud-btn">Esc</button>
         <button id="polar-confirm-btn" class="hud-btn primary">Enter ↵</button>
       </div>
-      <div class="hud-hint">Preencha e confirme · ou clique no canvas</div>
+      <div class="hud-hint">Tab: alternar campos · Preencha e Enter para criar · ou clique no canvas</div>
     </div>
 
     <!-- HUD Fillet/Round -->

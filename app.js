@@ -62,6 +62,7 @@ const ui = {
   coordMode:    'abs',  // 'abs' | 'rel'
   circleMode:   'center', // 'center' | 'side' (Tab alterna)
   circleSide:   'E',      // lado do centro em relação ao início: E/N/W/S
+  polarInputMode: 'polar', // 'polar' | 'absolute' — modo de entrada do HUD polar
   prevMouseScreen:  null,
 };
 
@@ -3608,22 +3609,65 @@ function cancelCurrentTool() {
 
 // ── HUD POLAR (LINHA) ─────────────────────────────────────
 function showPolarHud(origin) {
-  document.getElementById('polar-dist-input').value  = '';
+  // Preenche coordenadas do ponto de início (somente leitura)
+  document.getElementById('polar-start-x').textContent = origin.x.toFixed(2);
+  document.getElementById('polar-start-y').textContent = origin.y.toFixed(2);
+
+  // Reseta modo de entrada para o padrão
+  ui.polarInputMode = ui.polarInputMode || 'polar';
+
+  // Sincroniza o select
+  const modeSel = document.getElementById('polar-mode-select');
+  if (modeSel) modeSel.value = ui.polarInputMode;
+
+  // Mostra/esconde grupos de campos conforme o modo
+  const polarFields = document.getElementById('polar-fields-polar');
+  const absFields = document.getElementById('polar-fields-absolute');
+  if (ui.polarInputMode === 'polar') {
+    if (polarFields) polarFields.style.display = 'block';
+    if (absFields) absFields.style.display = 'none';
+  } else {
+    if (polarFields) polarFields.style.display = 'none';
+    if (absFields) absFields.style.display = 'block';
+  }
+
+  // Limpa valores dos inputs
+  document.getElementById('polar-dist-input').value = '';
   document.getElementById('polar-angle-input').value = '0';
+  document.getElementById('polar-end-x-input').value = '';
+  document.getElementById('polar-end-y-input').value = '';
+
   document.getElementById('polar-hud').classList.remove('hidden');
   // NÃO foca automaticamente para permitir Tab no canvas
 }
 
 function updatePolarHud() {
   if (!ui.lineStart) return;
+
+  // Atualiza o select se mudou (proteção)
+  const modeSel = document.getElementById('polar-mode-select');
+  if (modeSel && modeSel.value !== ui.polarInputMode) {
+    ui.polarInputMode = modeSel.value;
+    showPolarHud(ui.lineStart); // re-renderiza os campos
+    return;
+  }
+
   const dx = ui.mouseWorld.x - ui.lineStart.x;
   const dy = ui.mouseWorld.y - ui.lineStart.y;
   const dist = Math.hypot(dx, dy);
   const ang = ((Math.atan2(-dy, dx) * 180/Math.PI) + 360) % 360;
-  const distIn = document.getElementById('polar-dist-input');
-  const angIn = document.getElementById('polar-angle-input');
-  if (distIn && document.activeElement !== distIn) distIn.value = dist.toFixed(2);
-  if (angIn && document.activeElement !== angIn) angIn.value = ang.toFixed(1);
+
+  if (ui.polarInputMode === 'polar') {
+    const distIn = document.getElementById('polar-dist-input');
+    const angIn = document.getElementById('polar-angle-input');
+    if (distIn && document.activeElement !== distIn) distIn.value = dist.toFixed(2);
+    if (angIn && document.activeElement !== angIn) angIn.value = ang.toFixed(1);
+  } else {
+    const endXIn = document.getElementById('polar-end-x-input');
+    const endYIn = document.getElementById('polar-end-y-input');
+    if (endXIn && document.activeElement !== endXIn) endXIn.value = ui.mouseWorld.x.toFixed(2);
+    if (endYIn && document.activeElement !== endYIn) endYIn.value = ui.mouseWorld.y.toFixed(2);
+  }
 }
 
 function hidePolarHud() {
@@ -3728,23 +3772,42 @@ function commitCircleHud() {
   }
 }
 
-function commitPolarHud() {
+function commitLineHud() {
   if (!ui.lineStart) return;
-  const dist  = parseFloat(document.getElementById('polar-dist-input').value);
-  const angle = parseFloat(document.getElementById('polar-angle-input').value) || 0;
-  if (isNaN(dist) || dist <= 0) { toast('Distância inválida', 'warn'); return; }
 
-  const rad  = angle * Math.PI / 180;
-  const endX = ui.lineStart.x + dist * Math.cos(rad);
-  const endY = ui.lineStart.y - dist * Math.sin(rad);
+  let endX, endY;
+
+  if (ui.polarInputMode === 'polar') {
+    const dist  = parseFloat(document.getElementById('polar-dist-input').value);
+    const angle = parseFloat(document.getElementById('polar-angle-input').value) || 0;
+    if (isNaN(dist) || dist <= 0) { toast('Distância inválida', 'warn'); return; }
+
+    const rad  = angle * Math.PI / 180;
+    endX = ui.lineStart.x + dist * Math.cos(rad);
+    endY = ui.lineStart.y - dist * Math.sin(rad);
+  } else {
+    endX = parseFloat(document.getElementById('polar-end-x-input').value);
+    endY = parseFloat(document.getElementById('polar-end-y-input').value);
+    if (isNaN(endX) || isNaN(endY)) { toast('Coordenadas inválidas', 'warn'); return; }
+  }
 
   commitLine(ui.lineStart, { x: endX, y: endY });
   ui.lineStart = { x: endX, y: endY };
+
+  // Limpa campos do HUD
   document.getElementById('polar-dist-input').value  = '';
   document.getElementById('polar-angle-input').value = '0';
-  document.getElementById('polar-dist-input').focus();
-  setStatus(`Linha ${dist}cm a ${angle}° · continue ou Esc para finalizar`);
+  document.getElementById('polar-end-x-input').value = '';
+  document.getElementById('polar-end-y-input').value = '';
+
+  // Atualiza o HUD com o novo ponto de início
+  showPolarHud(ui.lineStart);
+
+  setStatus(`Linha criada · continue ou Esc para finalizar`);
 }
+
+// Mantém compatibilidade com chamadas antigas
+function commitPolarHud() { commitLineHud(); }
 
 // ── HUD FILLET ────────────────────────────────────────────
 function showFilletHud() { document.getElementById('fillet-hud').classList.remove('hidden'); }
@@ -4373,6 +4436,11 @@ document.getElementById('polar-cancel-btn').addEventListener('click', () => {
   hidePolarHud();
   setTool('select');
 });
+document.getElementById('polar-mode-select').addEventListener('change', e => {
+  ui.polarInputMode = e.target.value;
+  if (ui.lineStart) showPolarHud(ui.lineStart);
+  render();
+});
 
 // HUD círculo botões
 document.getElementById('circle-confirm-btn').addEventListener('click', commitCircleHud);
@@ -4436,17 +4504,30 @@ document.getElementById('angle-step-input').addEventListener('change', () => {
 });
 
 // Previne Tab de sair dos HUDs — navega entre os campos internos
-document.getElementById('polar-dist-input').addEventListener('keydown', e => {
-  if (e.key === 'Tab') {
-    e.preventDefault();
-    document.getElementById('polar-angle-input').focus();
+function polarHudTabCycle(e, forward) {
+  e.preventDefault();
+  const mode = ui.polarInputMode;
+  if (mode === 'polar') {
+    const first = document.getElementById('polar-dist-input');
+    const second = document.getElementById('polar-angle-input');
+    if (forward) { second.focus(); } else { first.focus(); }
+  } else {
+    const first = document.getElementById('polar-end-x-input');
+    const second = document.getElementById('polar-end-y-input');
+    if (forward) { second.focus(); } else { first.focus(); }
   }
+}
+document.getElementById('polar-dist-input').addEventListener('keydown', e => {
+  if (e.key === 'Tab') { polarHudTabCycle(e, !e.shiftKey); }
 });
 document.getElementById('polar-angle-input').addEventListener('keydown', e => {
-  if (e.key === 'Tab') {
-    e.preventDefault();
-    document.getElementById('polar-dist-input').focus();
-  }
+  if (e.key === 'Tab') { polarHudTabCycle(e, !e.shiftKey); }
+});
+document.getElementById('polar-end-x-input').addEventListener('keydown', e => {
+  if (e.key === 'Tab') { polarHudTabCycle(e, !e.shiftKey); }
+});
+document.getElementById('polar-end-y-input').addEventListener('keydown', e => {
+  if (e.key === 'Tab') { polarHudTabCycle(e, !e.shiftKey); }
 });
 document.getElementById('move-dist-input').addEventListener('keydown', e => {
   if (e.key === 'Tab') {
@@ -4475,7 +4556,7 @@ document.getElementById('circle-mode-select').addEventListener('keydown', e => {
 });
 
 // Polar HUD - Enter/Escape
-['polar-dist-input', 'polar-angle-input'].forEach(id => {
+['polar-dist-input', 'polar-angle-input', 'polar-end-x-input', 'polar-end-y-input'].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); commitPolarHud(); }
