@@ -71,6 +71,7 @@ const ui = {
   prevMouseScreen:  null,
   dragMove:     null,   // arrasto de objetos selecionados { ids, originals, nodeOriginals, start, moved }
   pasteMode:    null,   // colocação de colagem estilo AutoCAD { segs, anchor, offset }
+  pasteLabel:   null,   // nome exibido no status ao confirmar a colagem (biblioteca)
   clipboard:    null,   // { segs, anchor } — cópia em memória
 };
 
@@ -519,7 +520,7 @@ function redo() {
 // ── SET TOOL ─────────────────────────────────────────────
 function setTool(tool) {
   if (ui.dragMove) finishMoveDrag();
-  if (ui.pasteMode) ui.pasteMode = null;
+  if (ui.pasteMode) { ui.pasteMode = null; ui.pasteLabel = null; }
   if (tool === 'circle' && ui.tool !== 'circle') {
     ui.circleMode = 'center';
     ui.circleSide = 'E';
@@ -2741,6 +2742,7 @@ function updatePasteOffset(wp) {
 function commitPaste() {
   const pm = ui.pasteMode;
   if (!pm) return false;
+  const label = ui.pasteLabel;
   saveUndo();
   const created = [];
   for (const src of pm.segs) {
@@ -2754,17 +2756,341 @@ function commitPaste() {
   ui.selection.clear();
   created.forEach(c => ui.selection.add(c.id));
   ui.pasteMode = null;
+  ui.pasteLabel = null;
   refreshAfterEdit();
-  toast(`${created.length} objeto(s) colado(s)`, 'success');
+  setStatus(label ? `${label} inserida` : `${created.length} objeto(s) colado(s)`);
+  toast(label ? `${label} inserida` : `${created.length} objeto(s) colado(s)`, 'success');
   return true;
 }
 
 function cancelPaste() {
   if (!ui.pasteMode) return false;
   ui.pasteMode = null;
+  ui.pasteLabel = null;
   render();
   setStatus('Colagem cancelada');
   return true;
+}
+
+// ── BIBLIOTECA DE CURVAS ─────────────────────────────────
+// Cada curva é montada com linhas e arcos de 3 pontos do próprio editor.
+// A geometria é escrita em coordenadas matemáticas (Y para cima) e convertida
+// para o mundo do editor (Y para baixo) por libPt().
+
+function libPt(x, y) { return { x, y: -y }; }
+
+function libLine(x0, y0, x1, y1) {
+  return { type: 'line', points: [libPt(x0, y0), libPt(x1, y1)] };
+}
+
+function libArc(cx, cy, r, a0, a1) {
+  const rad = d => d * Math.PI / 180;
+  const mid = (a0 + a1) / 2;
+  return {
+    type: 'arc',
+    points: [
+      libPt(cx + r * Math.cos(rad(a0)), cy + r * Math.sin(rad(a0))),
+      libPt(cx + r * Math.cos(rad(mid)), cy + r * Math.sin(rad(mid))),
+      libPt(cx + r * Math.cos(rad(a1)), cy + r * Math.sin(rad(a1))),
+    ],
+  };
+}
+
+// Waypoints com cantos arredondados: gera linhas + arcos tangentes.
+// `radii[i]` é o raio desejado no vértice i (0 = canto vivo).
+function libRoundedPath(pts, radii) {
+  const segs = [];
+  let start = { x: pts[0][0], y: pts[0][1] };
+  const pushLine = (a, b) => {
+    if (Math.hypot(b.x - a.x, b.y - a.y) > 1e-9) segs.push(libLine(a.x, a.y, b.x, b.y));
+  };
+
+  for (let i = 1; i < pts.length - 1; i++) {
+    const prev = pts[i - 1], cur = pts[i], next = pts[i + 1];
+    const wanted = (radii && radii[i]) || 0;
+    let ux = cur[0] - prev[0], uy = cur[1] - prev[1];
+    let vx = next[0] - cur[0], vy = next[1] - cur[1];
+    const ul = Math.hypot(ux, uy), vl = Math.hypot(vx, vy);
+    ux /= ul; uy /= ul; vx /= vl; vy /= vl;
+
+    const cross = ux * vy - uy * vx;
+    const dot   = ux * vx + uy * vy;
+    const theta = Math.atan2(Math.abs(cross), dot);
+    if (wanted <= 1e-9 || theta < 1e-6 || Math.abs(cross) < 1e-9) {
+      pushLine(start, { x: cur[0], y: cur[1] });
+      start = { x: cur[0], y: cur[1] };
+      continue;
+    }
+
+    // Limita o raio para os dois lados do vértice caberem nos trechos.
+    const maxT = 0.45 * Math.min(ul, vl);
+    const r = Math.min(wanted, maxT * Math.tan(theta / 2));
+    const t = r / Math.tan(theta / 2);
+    const t1 = { x: cur[0] - ux * t, y: cur[1] - uy * t };
+    const t2 = { x: cur[0] + vx * t, y: cur[1] + vy * t };
+
+    // Centro do arco: normal para o lado da curva.
+    const sgn = cross > 0 ? 1 : -1;
+    const center = { x: t1.x - uy * sgn * r, y: t1.y + ux * sgn * r };
+
+    pushLine(start, t1);
+    const a0 = Math.atan2(t1.y - center.y, t1.x - center.x);
+    const a1 = Math.atan2(t2.y - center.y, t2.x - center.x);
+    let delta = a1 - a0;
+    if (sgn > 0 && delta < 0) delta += Math.PI * 2;
+    if (sgn < 0 && delta > 0) delta -= Math.PI * 2;
+    const am = a0 + delta / 2;
+    segs.push({
+      type: 'arc',
+      points: [
+        libPt(t1.x, t1.y),
+        libPt(center.x + r * Math.cos(am), center.y + r * Math.sin(am)),
+        libPt(t2.x, t2.y),
+      ],
+    });
+    start = t2;
+  }
+
+  const last = pts[pts.length - 1];
+  pushLine(start, { x: last[0], y: last[1] });
+  return segs;
+}
+
+const TRACK_LIBRARY = [
+  {
+    id: 'senna-s', name: 'S do Senna', track: 'Interlagos · Brasil',
+    build: () => libRoundedPath(
+      [[-28, 16], [-18, 16], [-12, 4], [-4, 12], [2, 2], [12, 2]],
+      [0, 5, 4, 4, 3, 0]),
+  },
+  {
+    id: 'parabolica', name: 'Parabólica', track: 'Monza · Itália',
+    build: () => [
+      libLine(-30, 0, 0, 0),
+      libArc(0, -22, 22, 90, -90),
+      libLine(0, -44, -30, -44),
+    ],
+  },
+  {
+    id: 'hairpin-loews', name: 'Hairpin Loews', track: 'Mônaco',
+    build: () => [
+      libLine(-18, 0, 0, 0),
+      libArc(0, -5, 5, 90, -90),
+      libLine(0, -10, -18, -10),
+    ],
+  },
+  {
+    id: 'eau-rouge', name: 'Eau Rouge / Raidillon', track: 'Spa-Francorchamps · Bélgica',
+    build: () => libRoundedPath(
+      [[-26, -12], [-16, -12], [-10, -2], [-2, -8], [4, 4], [14, 4]],
+      [0, 5, 4, 4, 3, 0]),
+  },
+  {
+    id: 'corkscrew', name: 'Corkscrew', track: 'Laguna Seca · EUA',
+    build: () => libRoundedPath(
+      [[-20, 10], [-12, 10], [-9, 4], [-2, 6], [6, 0], [16, 0]],
+      [0, 3, 2.5, 2.5, 2.5, 0]),
+  },
+  {
+    id: 'spoon', name: 'Spoon', track: 'Suzuka · Japão',
+    build: () => [
+      libLine(-30, 0, 0, 0),
+      libArc(0, 12, 12, -90, 0),
+      libLine(12, 12, 12, 18),
+      libArc(0, 18, 12, 0, 90),
+      libLine(0, 30, -30, 30),
+    ],
+  },
+  {
+    id: '130r', name: '130R', track: 'Suzuka · Japão',
+    build: () => {
+      const a1 = 40;
+      const end = { x: 18 * Math.cos(a1 * Math.PI / 180), y: 18 + 18 * Math.sin(a1 * Math.PI / 180) };
+      const tx  = -Math.sin(a1 * Math.PI / 180), ty = Math.cos(a1 * Math.PI / 180);
+      return [
+        libLine(-25, 0, 0, 0),
+        libArc(0, 18, 18, -90, a1),
+        libLine(end.x, end.y, end.x + tx * 12, end.y + ty * 12),
+      ];
+    },
+  },
+  {
+    id: 'bico-de-pato', name: 'Bico de Pato', track: 'Interlagos · Brasil',
+    build: () => [
+      libLine(-25, 0, 0, 0),
+      libArc(0, 12, 12, -90, 0),
+      libLine(12, 12, 12, 24),
+    ],
+  },
+  {
+    id: 'tamburello', name: 'Tamburello', track: 'Imola · Itália',
+    build: () => libRoundedPath(
+      [[-30, 0], [-14, 0], [-8, 8], [0, 0], [8, 8], [18, 0]],
+      [0, 4, 3, 3, 3, 0]),
+  },
+  {
+    id: 'turn-8', name: 'Turn 8', track: 'Istambul · Turquia',
+    build: () => libRoundedPath(
+      [[-30, 0], [-4, 0], [6, 4], [10, 10], [6, 16], [-4, 20], [-30, 20]],
+      [0, 4, 5, 5, 5, 4, 0]),
+  },
+];
+
+let curveLibraryReady = false;
+
+function drawLibraryThumb(canvas, segs) {
+  if (!canvas) return;
+  const cssW = canvas.clientWidth || 150;
+  const cssH = canvas.clientHeight || 58;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width  = Math.max(1, Math.round(cssW * dpr));
+  canvas.height = Math.max(1, Math.round(cssH * dpr));
+  const c = canvas.getContext('2d');
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.clearRect(0, 0, cssW, cssH);
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const add = (x, y) => {
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  };
+  for (const seg of segs) {
+    seg.points.forEach(p => add(p.x, p.y));
+    if (seg.type === 'circle') {
+      add(seg.points[0].x - seg.radius, seg.points[0].y - seg.radius);
+      add(seg.points[0].x + seg.radius, seg.points[0].y + seg.radius);
+    }
+  }
+  if (!isFinite(minX)) return;
+
+  const pad = 8;
+  const w = Math.max(maxX - minX, 1e-6);
+  const h = Math.max(maxY - minY, 1e-6);
+  const sc = Math.min((cssW - pad * 2) / w, (cssH - pad * 2) / h);
+  const ox = (cssW - w * sc) / 2 - minX * sc;
+  const oy = (cssH - h * sc) / 2 - minY * sc;
+  const tx = p => ({ x: p.x * sc + ox, y: p.y * sc + oy });
+
+  c.strokeStyle = '#e8003d';
+  c.lineWidth = 1.6;
+  c.lineCap = 'round';
+  c.lineJoin = 'round';
+  for (const seg of segs) {
+    c.beginPath();
+    if (seg.type === 'line' || seg.type === 'polyline') {
+      seg.points.forEach((p, i) => {
+        const q = tx(p);
+        if (i === 0) c.moveTo(q.x, q.y); else c.lineTo(q.x, q.y);
+      });
+    } else if (seg.type === 'arc') {
+      const N = 36;
+      for (let i = 0; i <= N; i++) {
+        const q = tx(arcPointAt(seg, i / N));
+        if (i === 0) c.moveTo(q.x, q.y); else c.lineTo(q.x, q.y);
+      }
+    } else if (seg.type === 'circle') {
+      const q = tx(seg.points[0]);
+      c.arc(q.x, q.y, seg.radius * sc, 0, Math.PI * 2);
+    }
+    c.stroke();
+  }
+}
+
+function buildCurveLibraryGrid() {
+  const grid = document.getElementById('curve-library-grid');
+  if (!grid || curveLibraryReady) return;
+  for (const item of TRACK_LIBRARY) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'lib-card';
+    card.dataset.curve = item.id;
+    card.title = `${item.name} — ${item.track}`;
+
+    const cv = document.createElement('canvas');
+    cv.className = 'lib-thumb';
+    const name = document.createElement('span');
+    name.className = 'lib-name';
+    name.textContent = item.name;
+    const track = document.createElement('span');
+    track.className = 'lib-track';
+    track.textContent = item.track;
+
+    card.append(cv, name, track);
+    card.addEventListener('click', () => insertLibraryCurve(item.id));
+    grid.appendChild(card);
+    drawLibraryThumb(cv, item.build());
+  }
+  curveLibraryReady = true;
+}
+
+function openCurveLibrary() {
+  const win = document.getElementById('curve-library');
+  if (!win) return;
+  // Uma colocação pendente é cancelada para não misturar os dois modos.
+  if (ui.pasteMode) {
+    ui.pasteMode = null;
+    ui.pasteLabel = null;
+    render();
+  }
+  win.classList.remove('hidden');
+  buildCurveLibraryGrid();
+  const btn = document.getElementById('btn-curve-library');
+  if (btn) btn.classList.add('active');
+  setStatus('Biblioteca de Curvas: escolha uma curva · Esc fecha');
+}
+
+function closeCurveLibrary() {
+  const win = document.getElementById('curve-library');
+  if (win) win.classList.add('hidden');
+  const btn = document.getElementById('btn-curve-library');
+  if (btn) btn.classList.remove('active');
+}
+
+function toggleCurveLibrary() {
+  const win = document.getElementById('curve-library');
+  if (!win) return;
+  if (win.classList.contains('hidden')) openCurveLibrary();
+  else closeCurveLibrary();
+}
+
+function scaleSegsAboutAnchor(segs, factor) {
+  const a = segmentsAnchor(segs);
+  if (!Number.isFinite(factor) || factor <= 0 || factor === 1) return a;
+  for (const seg of segs) {
+    seg.points.forEach(p => {
+      p.x = a.x + (p.x - a.x) * factor;
+      p.y = a.y + (p.y - a.y) * factor;
+    });
+    if (seg.type === 'circle') seg.radius *= factor;
+    if (seg.originalCircle) seg.originalCircle.r *= factor;
+  }
+  return a;
+}
+
+function insertLibraryCurve(id) {
+  const item = TRACK_LIBRARY.find(i => i.id === id);
+  if (!item) return;
+  const scaleEl = document.getElementById('curve-library-scale');
+  let factor = parseFloat(scaleEl && scaleEl.value);
+  if (!Number.isFinite(factor) || factor <= 0) factor = 1;
+  factor = Math.max(0.1, Math.min(5, factor));
+
+  const segs = item.build().map(seg => ({
+    ...seg,
+    selected: false,
+    points: seg.points.map(p => ({ ...p })),
+  }));
+  const anchor = scaleSegsAboutAnchor(segs, factor);
+
+  closeCurveLibrary();
+  setTool('select');
+  ui.snapTarget = null;
+  ui.clipboard = { segs, anchor: { ...anchor } };
+  if (!startPasteMode()) return;
+  ui.pasteLabel = item.name;
+  setStatus(`${item.name}: clique no desenho para inserir · Enter confirma · Esc cancela`);
 }
 
 // ── MOVER COM PRECISÃO ────────────────────────────────────
@@ -4022,6 +4348,8 @@ function onKeyDown(e) {
   // Escape sempre funciona
   if (e.key === 'Escape') {
     e.preventDefault();
+    const lib = document.getElementById('curve-library');
+    if (lib && !lib.classList.contains('hidden')) { closeCurveLibrary(); return; }
     if (cancelPaste()) return;
     if (cancelMoveDrag()) return;
     cancelCurrentTool();
@@ -4210,7 +4538,7 @@ function onKeyDown(e) {
 
 function cancelCurrentTool() {
   // Cancela colagem/arrasto pendentes antes de limpar a ferramenta
-  if (ui.pasteMode) ui.pasteMode = null;
+  if (ui.pasteMode) { ui.pasteMode = null; ui.pasteLabel = null; }
   if (ui.dragMove) { cancelMoveDrag(); }
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
   ui.lineStart    = null;
@@ -5113,6 +5441,7 @@ document.querySelectorAll('[data-action]').forEach(btn => {
         state.showCritical = !state.showCritical;
         render(); break;
       case 'coord':         setTool('line'); openCoordHud(); break;
+      case 'curve-library': toggleCurveLibrary(); break;
       case 'tool-circle':   setTool('circle');   break;
       case 'tool-rect':     setTool('rect');     break;
       case 'tool-polyline': setTool('polyline'); break;
@@ -5137,6 +5466,9 @@ document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
     if (btn.dataset.tool === 'move') openMoveHud();
   });
 });
+
+document.getElementById('btn-curve-library').addEventListener('click', toggleCurveLibrary);
+document.getElementById('curve-library-close').addEventListener('click', closeCurveLibrary);
 
 document.getElementById('btn-undo').addEventListener('click', undo);
 document.getElementById('btn-redo').addEventListener('click', redo);
