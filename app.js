@@ -64,6 +64,9 @@ const ui = {
   circleSide:   'E',      // lado do centro em relação ao início: E/N/W/S
   polarInputMode: 'polar', // 'polar' | 'absolute' — modo de entrada do HUD polar
   prevMouseScreen:  null,
+  dragMove:     null,   // arrasto de objetos selecionados { ids, originals, nodeOriginals, start, moved }
+  pasteMode:    null,   // colocação de colagem estilo AutoCAD { segs, anchor, offset }
+  clipboard:    null,   // { segs, anchor } — cópia em memória
 };
 
 // ── CANVAS ───────────────────────────────────────────────
@@ -115,12 +118,13 @@ function getAllEndpoints() {
 }
 
 // Retorna ponto magnético mais próximo (em px de tela) ou null
-function getMagneticSnap(sx, sy, exclude) {
+function getMagneticSnap(sx, sy, exclude, excludeIds) {
   if (!state.snapEnabled) return null;
   const pts = getAllEndpoints();
   let best = null, bestD = Infinity;
   for (const pt of pts) {
     if (exclude && pt.segId === exclude.segId && pt.idx === exclude.idx) continue;
+    if (excludeIds && excludeIds.has(pt.segId)) continue;
     const sp = w2s(pt.x, pt.y);
     const d  = Math.hypot(sp.x - sx, sp.y - sy);
     if (d < SNAP_MAG_PX && d < bestD) {
@@ -501,6 +505,8 @@ function redo() {
 
 // ── SET TOOL ─────────────────────────────────────────────
 function setTool(tool) {
+  if (ui.dragMove) finishMoveDrag();
+  if (ui.pasteMode) ui.pasteMode = null;
   if (tool === 'circle' && ui.tool !== 'circle') {
     ui.circleMode = 'center';
     ui.circleSide = 'E';
@@ -2302,7 +2308,13 @@ function handleSelectDown(sx, sy, e) {
     if (e.ctrlKey) {
       ui.selection.has(hit.id) ? ui.selection.delete(hit.id) : ui.selection.add(hit.id);
     } else {
-      if (!ui.selection.has(hit.id)) { ui.selection.clear(); ui.selection.add(hit.id); }
+      if (!ui.selection.has(hit.id)) {
+        ui.selection.clear();
+        ui.selection.add(hit.id);
+      } else {
+        // Já selecionado → inicia arrasto (estilo AutoCAD)
+        if (startMoveDrag(s2w(sx, sy))) return;
+      }
     }
   } else {
     if (!e.ctrlKey) ui.selection.clear();
@@ -2348,6 +2360,210 @@ function selectAll() {
   state.segments.forEach(s => ui.selection.add(s.id));
   updateSelectionPanel();
   render();
+}
+
+// ── MOVER POR ARRASTO (objetos selecionados) ──────────────
+function translateSeg(seg, dx, dy) {
+  seg.points.forEach(p => { p.x += dx; p.y += dy; });
+  if (seg.originalCircle && seg.originalCircle.c) {
+    seg.originalCircle.c.x += dx;
+    seg.originalCircle.c.y += dy;
+  }
+}
+
+function cloneTranslated(seg, dx, dy) {
+  const c = JSON.parse(JSON.stringify(seg));
+  translateSeg(c, dx, dy);
+  return c;
+}
+
+// Centro da caixa envolvente dos segmentos (âncora de colagem)
+function segmentsAnchor(segs) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const add = (x, y) => {
+    if (x < minX) minX = x;
+    if (y < minY) minY = y;
+    if (x > maxX) maxX = x;
+    if (y > maxY) maxY = y;
+  };
+  for (const seg of segs) {
+    seg.points.forEach(p => add(p.x, p.y));
+    if (seg.type === 'circle') {
+      add(seg.points[0].x - seg.radius, seg.points[0].y - seg.radius);
+      add(seg.points[0].x + seg.radius, seg.points[0].y + seg.radius);
+    }
+  }
+  if (!isFinite(minX)) return { x: 0, y: 0 };
+  return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
+}
+
+function startMoveDrag(wp) {
+  if (!ui.selection.size) return false;
+  const ids = new Set(ui.selection);
+  const originals = new Map();
+  state.segments.forEach(seg => {
+    if (ids.has(seg.id)) originals.set(seg.id, JSON.parse(JSON.stringify(seg)));
+  });
+  const nodeOriginals = {};
+  ['start', 'end'].forEach(k => {
+    const n = state.nodes[k];
+    nodeOriginals[k] = (n && ids.has(n.segId)) ? { x: n.x, y: n.y } : null;
+  });
+  ui.dragMove = {
+    ids, originals, nodeOriginals,
+    start: { x: wp.x, y: wp.y },
+    last:  { x: wp.x, y: wp.y },
+    moved: false,
+    undoPushed: false,
+  };
+  canvas.classList.add('cursor-move');
+  return true;
+}
+
+function updateMoveDrag(wp) {
+  const d = ui.dragMove;
+  if (!d) return;
+  // Ponto de destino: ímã magnético ou cursor com restrição de eixo/ângulo
+  const target = ui.snapTarget ? { ...ui.snapTarget } : pointFromConstraint(d.start, { x: wp.x, y: wp.y });
+  const dx = target.x - d.start.x;
+  const dy = target.y - d.start.y;
+
+  if (!d.moved && Math.hypot(dx, dy) < 1e-9) return;
+
+  // Primeiro movimento real: registra undo uma única vez
+  if (!d.moved) {
+    saveUndo();
+    d.moved = true;
+    d.undoPushed = true;
+  }
+
+  for (const [id, orig] of d.originals) {
+    const seg = state.segments.find(s => s.id === id);
+    if (!seg) continue;
+    seg.points = orig.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
+    if (orig.originalCircle) {
+      seg.originalCircle = {
+        c: { x: orig.originalCircle.c.x + dx, y: orig.originalCircle.c.y + dy },
+        r: orig.originalCircle.r,
+      };
+    }
+  }
+  ['start', 'end'].forEach(k => {
+    const o = d.nodeOriginals[k];
+    if (!o) return;
+    const n = state.nodes[k];
+    if (n) { n.x = o.x + dx; n.y = o.y + dy; }
+  });
+  d.last = { x: target.x, y: target.y };
+}
+
+function finishMoveDrag() {
+  const d = ui.dragMove;
+  if (!d) return;
+  ui.dragMove = null;
+  canvas.classList.remove('cursor-move');
+  if (!d.moved) { render(); return; }
+  state.dijkstraPath = [];
+  reattachNodes([...d.ids]);
+  updatePanelInfo();
+  updateSelectionPanel();
+  render();
+  setStatus('Objeto(s) movido(s)');
+}
+
+function cancelMoveDrag() {
+  const d = ui.dragMove;
+  if (!d) return false;
+  // Remove o undo registrado no início do arrasto
+  if (d.undoPushed) state.undoStack.pop();
+  // Restaura posições originais
+  for (const [id, orig] of d.originals) {
+    const idx = state.segments.findIndex(s => s.id === id);
+    if (idx >= 0) {
+      const live = state.segments[idx];
+      const fresh = JSON.parse(JSON.stringify(orig));
+      Object.assign(live, fresh);
+    }
+  }
+  ['start', 'end'].forEach(k => {
+    const o = d.nodeOriginals[k];
+    if (!o) return;
+    const n = state.nodes[k];
+    if (n) { n.x = o.x; n.y = o.y; }
+  });
+  ui.dragMove = null;
+  canvas.classList.remove('cursor-move');
+  render();
+  setStatus('Movimento cancelado');
+  return true;
+}
+
+// ── COPIAR / COLAR (estilo AutoCAD) ───────────────────────
+function copySelection() {
+  if (!ui.selection.size) { toast('Selecione objetos para copiar', 'warn'); return false; }
+  const segs = state.segments
+    .filter(s => ui.selection.has(s.id))
+    .map(s => JSON.parse(JSON.stringify(s)));
+  ui.clipboard = { segs, anchor: segmentsAnchor(segs) };
+  toast(`${segs.length} objeto(s) copiado(s)`, 'success');
+  return true;
+}
+
+function startPasteMode() {
+  if (!ui.clipboard || !ui.clipboard.segs.length) {
+    toast('Nada para colar', 'warn');
+    return false;
+  }
+  if (ui.dragMove) finishMoveDrag();
+  // Fantasma já nasce sob o cursor (estilo PASTECLIP do AutoCAD)
+  const cursor = ui.snapTarget ? { ...ui.snapTarget } : { ...ui.mouseWorld };
+  ui.pasteMode = {
+    segs: JSON.parse(JSON.stringify(ui.clipboard.segs)),
+    anchor: { ...ui.clipboard.anchor },
+    offset: {
+      x: cursor.x - ui.clipboard.anchor.x,
+      y: cursor.y - ui.clipboard.anchor.y,
+    },
+  };
+  setStatus('Clique para colar · Enter confirma no cursor · Esc cancela');
+  render();
+  return true;
+}
+
+function updatePasteOffset(wp) {
+  const pm = ui.pasteMode;
+  if (!pm) return;
+  const target = ui.snapTarget ? { ...ui.snapTarget } : { x: wp.x, y: wp.y };
+  pm.offset = { x: target.x - pm.anchor.x, y: target.y - pm.anchor.y };
+}
+
+function commitPaste() {
+  const pm = ui.pasteMode;
+  if (!pm) return false;
+  saveUndo();
+  const created = [];
+  for (const src of pm.segs) {
+    const copy = JSON.parse(JSON.stringify(src));
+    copy.id = state.nextId++;
+    copy.selected = false;
+    translateSeg(copy, pm.offset.x, pm.offset.y);
+    state.segments.push(copy);
+    created.push(copy);
+  }
+  ui.selection.clear();
+  created.forEach(c => ui.selection.add(c.id));
+  ui.pasteMode = null;
+  refreshAfterEdit();
+  toast(`${created.length} objeto(s) colado(s)`, 'success');
+  return true;
+}
+
+function cancelPaste() {
+  if (!ui.pasteMode) return false;
+  ui.pasteMode = null;
+  render();
+  setStatus('Colagem cancelada');
+  return true;
 }
 
 // ── MOVER COM PRECISÃO ────────────────────────────────────
@@ -3013,6 +3229,29 @@ function drawPreview() {
   const wp = ui.mouseWorld;
   const pt = ui.snapTarget ? { ...ui.snapTarget } : { ...wp };
 
+  // Prévia de colagem (fantasma seguindo o cursor)
+  if (ui.pasteMode) {
+    const off = ui.pasteMode.offset;
+    ctx.save();
+    ctx.globalAlpha  = 0.6;
+    ctx.strokeStyle  = '#ffe066';
+    ctx.lineWidth    = Math.max(0.5, 1.5 * cam.scale);
+    ctx.lineCap      = 'round';
+    ctx.lineJoin     = 'round';
+    ctx.setLineDash([7 * cam.scale, 5 * cam.scale]);
+    for (const src of ui.pasteMode.segs) {
+      strokeSegPath(cloneTranslated(src, off.x, off.y));
+    }
+    ctx.setLineDash([]);
+    ctx.restore();
+    // Ponto de encaixe (âncora da colagem)
+    const ap = w2s(ui.pasteMode.anchor.x + off.x, ui.pasteMode.anchor.y + off.y);
+    ctx.beginPath();
+    ctx.arc(ap.x, ap.y, 3, 0, Math.PI*2);
+    ctx.fillStyle = '#ffe066';
+    ctx.fill();
+  }
+
   if (ui.tool === 'line' && ui.lineStart) {
     const end = ui.snapTarget ? pt : pointFromConstraint(ui.lineStart, pt);
     drawDashedLine(ui.lineStart, end, 'rgba(74,158,255,0.45)');
@@ -3314,10 +3553,14 @@ function onMouseDown(e) {
     return;
   }
   if (e.button === 2) {
+    if (cancelPaste()) return;
     cancelCurrentTool();
     return;
   }
   if (e.button !== 0) return;
+
+  // Modo de colocação de colagem: clique confirma
+  if (ui.pasteMode) { commitPaste(); return; }
 
   switch (ui.tool) {
     case 'select':      handleSelectDown(sx, sy, e); break;
@@ -3351,7 +3594,7 @@ function onMouseMove(e) {
   ui.mouseWorld  = wp;
 
   // Snap magnético (ignora o próprio vértice que está sendo arrastado)
-  ui.snapTarget = getMagneticSnap(sx, sy, ui.dragVertex);
+  ui.snapTarget = getMagneticSnap(sx, sy, ui.dragVertex, ui.dragMove ? ui.dragMove.ids : null);
 
   // Escolha do lado (N/L/S/O) no modo "pela borda" do círculo
   const prevScreen = ui.prevMouseScreen;
@@ -3366,6 +3609,16 @@ function onMouseMove(e) {
       const dx = wp.x - ui.circleCenter.x, dy = wp.y - ui.circleCenter.y;
       if (Math.hypot(dx, dy) > 0.5) ui.circleSide = circleSideFromDelta(dx, dy);
     }
+  }
+
+  // Arrasto de objetos selecionados (mover)
+  if (ui.dragMove) {
+    updateMoveDrag(wp);
+  }
+
+  // Modo de colocação de colagem: atualiza a prévia
+  if (ui.pasteMode) {
+    updatePasteOffset(wp);
   }
 
   // Arrasto de vértice (Editar Vértice)
@@ -3430,6 +3683,10 @@ function onMouseUp(e) {
   if (e.button === 1) {
     ui.isPanning = false;
     canvas.classList.remove('cursor-pan');
+    return;
+  }
+  if (e.button === 0 && ui.dragMove) {
+    finishMoveDrag();
     return;
   }
   if (e.button === 0 && ui.dragVertex) {
@@ -3513,6 +3770,8 @@ function onKeyDown(e) {
   // Escape sempre funciona
   if (e.key === 'Escape') {
     e.preventDefault();
+    if (cancelPaste()) return;
+    if (cancelMoveDrag()) return;
     cancelCurrentTool();
     return;
   }
@@ -3611,6 +3870,18 @@ function onKeyDown(e) {
   if (ctrl && e.key === 'z') { e.preventDefault(); undo(); return; }
   if (ctrl && (e.key==='y'||e.key==='Y')) { e.preventDefault(); redo(); return; }
 
+  // Ctrl+C / Ctrl+V: copiar e colar objetos (ignora quando foco está em input)
+  if (!inInput && ctrl && (e.key === 'c' || e.key === 'C')) {
+    e.preventDefault();
+    copySelection();
+    return;
+  }
+  if (!inInput && ctrl && (e.key === 'v' || e.key === 'V')) {
+    e.preventDefault();
+    startPasteMode();
+    return;
+  }
+
   if (inInput) return;
 
   // Tab na ferramenta Círculo alterna entre iniciar pelo centro e pela borda (4 lados)
@@ -3622,6 +3893,7 @@ function onKeyDown(e) {
 
   // Enter finaliza construções no canvas
   if (e.key === 'Enter') {
+    if (ui.pasteMode) { e.preventDefault(); commitPaste(); return; }
     if (ui.tool === 'polyline') { e.preventDefault(); finalizePolyline(); return; }
     if (ui.tool === 'line') {
       e.preventDefault();
@@ -3683,6 +3955,9 @@ function onKeyDown(e) {
 }
 
 function cancelCurrentTool() {
+  // Cancela colagem/arrasto pendentes antes de limpar a ferramenta
+  if (ui.pasteMode) ui.pasteMode = null;
+  if (ui.dragMove) { cancelMoveDrag(); }
   if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
   ui.lineStart    = null;
   ui.arcPoints    = [];
