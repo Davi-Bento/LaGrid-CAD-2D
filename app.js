@@ -3555,8 +3555,8 @@ function onKeyDown(e) {
     case 'k': case 'K': if (!ctrl) setTool('break');    break;
     case 'x': case 'X': if (!ctrl) setTool('mirror');   break;
     case 'q': case 'Q': if (!ctrl) { setTool('line'); openCoordHud(); } break;
-    case '1': setTool('start-node'); break;
-    case '2': setTool('end-node');   break;
+    case '1': if (ctrl) setTool('start-node'); break;
+    case '2': if (ctrl) setTool('end-node');   break;
     case 'Delete': case 'Backspace': deleteSelection(); break;
     case 'f': case 'F': if (!ctrl) { e.preventDefault(); fitView(); } break;
     case 'g': case 'G':
