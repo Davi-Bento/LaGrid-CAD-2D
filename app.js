@@ -3501,16 +3501,20 @@ function onKeyDown(e) {
     return;
   }
 
+  const ctrl = e.ctrlKey || e.metaKey;
+
+  // Ctrl+Z / Ctrl+Y devem funcionar mesmo com input focado
+  if (ctrl && e.key === 'z') { e.preventDefault(); undo(); return; }
+  if (ctrl && (e.key==='y'||e.key==='Y')) { e.preventDefault(); redo(); return; }
+
   if (inInput) return;
 
   // Tab na ferramenta Círculo alterna entre iniciar pelo centro e pela borda (4 lados)
-  if (e.key === 'Tab' && ui.tool === 'circle' && !e.ctrlKey && !e.metaKey) {
+  if (e.key === 'Tab' && ui.tool === 'circle' && !ctrl) {
     e.preventDefault();
     toggleCircleMode();
     return;
   }
-
-  const ctrl = e.ctrlKey || e.metaKey;
 
   // Enter finaliza construções no canvas
   if (e.key === 'Enter') {
@@ -3534,13 +3538,6 @@ function onKeyDown(e) {
       case 'V': e.preventDefault(); setTool('vertex-edit'); return;
     }
   }
-
-  if (ctrl && e.key === 'z') { e.preventDefault(); undo(); return; }
-  if (ctrl && (e.key==='y'||e.key==='Y')) { e.preventDefault(); redo(); return; }
-  if (ctrl && e.key === 's') { e.preventDefault(); saveJSON(); return; }
-  if (ctrl && e.key === 'o') { e.preventDefault(); document.getElementById('file-input').click(); return; }
-  if (ctrl && e.key === 'n') { e.preventDefault(); newProject(); return; }
-  if (ctrl && e.key === 'a') { e.preventDefault(); selectAll(); return; }
 
   switch (e.key) {
     case 'v': case 'V': setTool('select'); break;
