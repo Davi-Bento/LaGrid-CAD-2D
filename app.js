@@ -63,7 +63,7 @@ const ui = {
   mirrorPts:    [],     // eixo do espelho em construção
   offsetTargetId: null, // objeto escolhido para offset
   coordMode:    'abs',  // 'abs' | 'rel'
-  circleMode:   'center', // 'center' | 'side' (Tab alterna)
+  circleMode:   'center', // 'center' | 'side' (Ctrl+Tab alterna)
   circleSide:   'E',      // lado do centro em relação ao início: E/N/W/S
   spiralAnchor: null,     // ponto de referência da espiral em construção
   spiralAnchorSet: false, // true depois de clicar/digitar a referência
@@ -632,13 +632,13 @@ function commitLine(p0, p1) {
 // ── CÍRCULO ───────────────────────────────────────────────
 function circleStatusText() {
   if (ui.circleMode === 'center') {
-    return 'Círculo: clique no centro · Tab inicia pela borda (4 lados)';
+    return 'Círculo: clique no centro · Ctrl+Tab inicia pela borda (4 lados)';
   }
   const s = CIRCLE_SIDES[ui.circleSide];
   if (!ui.circleCenter) {
-    return `Círculo pela borda · mova o mouse para escolher o lado (centro para ${s.label}) · clique no início · Tab volta ao centro`;
+    return `Círculo pela borda · mova o mouse para escolher o lado (centro para ${s.label}) · clique no início · Ctrl+Tab volta ao centro`;
   }
-  return `Início definido · centro para ${s.label} · clique no lado oposto (diâmetro) · Tab volta ao centro`;
+  return `Início definido · centro para ${s.label} · clique no lado oposto (diâmetro) · Ctrl+Tab volta ao centro`;
 }
 
 function circleClick(wx, wy, e) {
@@ -662,7 +662,7 @@ function circleClick(wx, wy, e) {
   if (ui.circleMode === 'center') {
     if (!ui.circleCenter) {
       ui.circleCenter = { ...pt };
-      setStatus('Centro definido · clique para definir o raio · Tab inicia pela borda');
+      setStatus('Centro definido · clique para definir o raio · Ctrl+Tab inicia pela borda');
       updateCircleHud();
       return;
     }
@@ -4843,62 +4843,21 @@ function onKeyDown(e) {
     return;
   }
 
-  // Se HUD da linha está aberto e nenhum input focado, direciona números para o input apropriado
-  const lineHudOpen = !document.getElementById('polar-hud').classList.contains('hidden');
-  if (lineHudOpen && !inInput && /^[0-9.,]$/.test(e.key)) {
-    let targetInput;
-    if (ui.polarInputMode === 'polar') {
-      targetInput = document.getElementById('polar-dist-input');
-    } else {
-      // Modo absoluto: se não tem início definido, foca no Início X, senão no Final X
-      targetInput = ui.lineStart ? document.getElementById('polar-end-x-input') : document.getElementById('polar-start-x-input');
-    }
-    if (targetInput) {
-      e.preventDefault();
-      // Reset na primeira digitação
-      if (!targetInput.dataset.typing) {
-        targetInput.value = '';
-        targetInput.dataset.typing = 'true';
-      }
-      targetInput.focus();
-      const cursorPos = targetInput.selectionStart;
-      const val = targetInput.value;
-      targetInput.value = val.slice(0, cursorPos) + e.key + val.slice(cursorPos);
-      targetInput.setSelectionRange(cursorPos + 1, cursorPos + 1);
-      targetInput.dispatchEvent(new Event('input', { bubbles: true }));
-    }
-    return;
+  // Ctrl+Tab alterna a aba do HUD (modo/referência) sem sair do campo.
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Tab') {
+    if (cycleHudTab(!e.shiftKey)) { e.preventDefault(); return; }
   }
 
-  // Se HUD do círculo está aberto e nenhum input focado, direciona números para o input de diâmetro
-  const circleHudOpen = !document.getElementById('circle-hud').classList.contains('hidden');
-  if (circleHudOpen && !inInput && /^[0-9.,]$/.test(e.key)) {
-    const diameterInput = ui.circleMode === 'center' 
-      ? document.getElementById('circle-diameter-input')
-      : document.getElementById('circle-diameter-input-side');
-    if (diameterInput) {
+  // Digitou um número sem campo focado? Vai para o parâmetro principal do HUD
+  // e a primeira digitação substitui o valor (estilo AutoCAD).
+  const hud = activeHud();
+  if (hud && !inInput && /^[0-9.,-]$/.test(e.key)) {
+    const target = hudPrimaryInput(hud);
+    if (target) {
       e.preventDefault();
-      // Reset na primeira digitação
-      if (!diameterInput.dataset.typing) {
-        diameterInput.value = '';
-        diameterInput.dataset.typing = 'true';
-      }
-      diameterInput.focus();
-      const cursorPos = diameterInput.selectionStart;
-      const val = diameterInput.value;
-      diameterInput.value = val.slice(0, cursorPos) + e.key + val.slice(cursorPos);
-      diameterInput.setSelectionRange(cursorPos + 1, cursorPos + 1);
-      diameterInput.dispatchEvent(new Event('input', { bubbles: true }));
+      typeIntoHudInput(target, e.key);
+      return;
     }
-    return;
-  }
-
-  // Tab na ferramenta Círculo alterna entre iniciar pelo centro e pela borda (4 lados)
-  // Funciona mesmo com HUD aberto (antes do early return de inInput)
-  if (e.key === 'Tab' && ui.tool === 'circle' && !e.ctrlKey && !e.metaKey) {
-    e.preventDefault();
-    toggleCircleMode();
-    return;
   }
 
   // Enter nos HUDs
@@ -4975,14 +4934,10 @@ function onKeyDown(e) {
     }
   }
 
-  if (inInput) return;
+  // Tab percorre os parâmetros do HUD aberto (não sai da janela).
+  if (e.key === 'Tab' && !ctrl && !e.altKey && hudTabMove(e, !e.shiftKey)) return;
 
-  // Tab na ferramenta Círculo alterna entre iniciar pelo centro e pela borda (4 lados)
-  if (e.key === 'Tab' && ui.tool === 'circle' && !ctrl) {
-    e.preventDefault();
-    toggleCircleMode();
-    return;
-  }
+  if (inInput) return;
 
   // Enter finaliza construções no canvas
   if (e.key === 'Enter') {
@@ -5136,7 +5091,7 @@ function showPolarHud(origin) {
   document.getElementById('polar-end-y-input').dataset.typing = '';
 
   document.getElementById('polar-hud').classList.remove('hidden');
-  // NÃO foca automaticamente para permitir Tab no canvas
+  // NÃO foca automaticamente para permitir digitação direta no canvas
 }
 
 function updatePolarHud() {
@@ -6179,65 +6134,157 @@ document.getElementById('dist-step-input').addEventListener('change', () => {
   if (!isNaN(v) && v > 0) state.distStep = v;
 });
 
-// Previne Tab de sair dos HUDs — navega entre os campos internos
-function polarHudTabCycle(e, forward) {
-  e.preventDefault();
-  const mode = ui.polarInputMode;
-  let fields;
-  if (mode === 'polar') {
-    fields = [
-      document.getElementById('polar-start-x-input'),
-      document.getElementById('polar-start-y-input'),
-      document.getElementById('polar-dist-input'),
-      document.getElementById('polar-angle-input'),
-    ];
-  } else {
-    fields = [
-      document.getElementById('polar-start-x-input'),
-      document.getElementById('polar-start-y-input'),
-      document.getElementById('polar-end-x-input'),
-      document.getElementById('polar-end-y-input'),
-    ];
-  }
-  const active = document.activeElement;
-  const idx = fields.findIndex(f => f === active);
-  if (idx >= 0) {
-    const nextIdx = forward ? (idx + 1) % fields.length : (idx - 1 + fields.length) % fields.length;
-    fields[nextIdx].focus();
-  }
+// ── NAVEGAÇÃO DOS HUDs (estilo AutoCAD) ──────────────────
+// Tab percorre os parâmetros; Ctrl+Tab alterna a aba (modo/referência).
+// A primeira digitação substitui o valor; depois de uma pausa o campo
+// volta a "zerar" na próxima tecla, como no AutoCAD.
+const HUD_IDLE_MS = 2500;
+const HUD_SPECS = {
+  line: {
+    panel: 'polar-hud',
+    tab: 'polar-mode-select',
+    primary: () => ui.polarInputMode === 'polar'
+      ? 'polar-dist-input'
+      : (ui.lineStart ? 'polar-end-x-input' : 'polar-start-x-input'),
+    fields: () => ui.polarInputMode === 'polar'
+      ? ['polar-start-x-input', 'polar-start-y-input', 'polar-dist-input', 'polar-angle-input']
+      : ['polar-start-x-input', 'polar-start-y-input', 'polar-end-x-input', 'polar-end-y-input'],
+  },
+  circle: {
+    panel: 'circle-hud',
+    tab: 'circle-mode-select',
+    primary: () => ui.circleMode === 'center'
+      ? 'circle-diameter-input'
+      : 'circle-diameter-input-side',
+    fields: () => ui.circleMode === 'center'
+      ? ['circle-diameter-input', 'circle-cx-input', 'circle-cy-input']
+      : ['circle-diameter-input-side', 'circle-start-x-input', 'circle-start-y-input', 'circle-side-select'],
+  },
+  spiral: {
+    panel: 'spiral-hud',
+    tab: 'spiral-anchor',
+    primary: 'spiral-cx',
+    fields: ['spiral-cx', 'spiral-cy', 'spiral-center-start', 'spiral-r1', 'spiral-angle',
+             'spiral-factor', 'spiral-count', 'spiral-subdiv', 'spiral-start', 'spiral-dir', 'spiral-tail'],
+  },
+  offset: { panel: 'offset-hud', primary: 'offset-dist', fields: ['offset-dist'] },
+  fillet: { panel: 'fillet-hud', primary: 'fillet-radius', fields: ['fillet-radius'] },
+  rotate: { panel: 'rotate-hud', primary: 'rotate-angle', fields: ['rotate-angle'] },
+  scale:  { panel: 'scale-hud',  primary: 'scale-factor', fields: ['scale-factor'] },
+  array:  { panel: 'array-hud',  primary: 'array-count',  fields: ['array-count', 'array-dx', 'array-dy'] },
+  coord:  { panel: 'coord-hud',  tab: 'coord-mode', primary: 'coord-x-input', fields: ['coord-x-input', 'coord-y-input'] },
+  move:   { panel: 'move-hud',   primary: 'move-dist-input', fields: ['move-dist-input', 'move-angle-input'] },
+};
+
+function visibleHud(tool) {
+  const spec = HUD_SPECS[tool];
+  if (!spec) return null;
+  const panel = document.getElementById(spec.panel);
+  return panel && !panel.classList.contains('hidden') ? { tool, spec, panel } : null;
 }
-document.getElementById('polar-start-x-input').addEventListener('keydown', e => {
-  if (e.key === 'Tab') { polarHudTabCycle(e, !e.shiftKey); }
-});
-document.getElementById('polar-start-y-input').addEventListener('keydown', e => {
-  if (e.key === 'Tab') { polarHudTabCycle(e, !e.shiftKey); }
-});
-document.getElementById('polar-dist-input').addEventListener('keydown', e => {
-  if (e.key === 'Tab') { polarHudTabCycle(e, !e.shiftKey); }
-});
-document.getElementById('polar-angle-input').addEventListener('keydown', e => {
-  if (e.key === 'Tab') { polarHudTabCycle(e, !e.shiftKey); }
-});
-document.getElementById('polar-end-x-input').addEventListener('keydown', e => {
-  if (e.key === 'Tab') { polarHudTabCycle(e, !e.shiftKey); }
-});
-document.getElementById('polar-end-y-input').addEventListener('keydown', e => {
-  if (e.key === 'Tab') { polarHudTabCycle(e, !e.shiftKey); }
-});
-document.getElementById('move-dist-input').addEventListener('keydown', e => {
-  if (e.key === 'Tab') {
-    e.preventDefault();
-    document.getElementById('move-angle-input').focus();
+
+function activeHud() {
+  const ae = document.activeElement;
+  for (const tool of Object.keys(HUD_SPECS)) {
+    const hud = visibleHud(tool);
+    if (hud && ae && hud.panel.contains(ae)) return hud;
   }
-});
-document.getElementById('move-angle-input').addEventListener('keydown', e => {
-  if (e.key === 'Tab') {
-    e.preventDefault();
-    document.getElementById('move-dist-input').focus();
+  const byTool = visibleHud(ui.tool);
+  if (byTool) return byTool;
+  for (const tool of Object.keys(HUD_SPECS)) {
+    const hud = visibleHud(tool);
+    if (hud) return hud;
   }
+  return null;
+}
+
+function hudFields(hud) {
+  const ids = typeof hud.spec.fields === 'function' ? hud.spec.fields() : hud.spec.fields;
+  return ids.map(id => document.getElementById(id)).filter(el => el && el.offsetParent !== null);
+}
+
+function hudPrimaryInput(hud) {
+  const id = typeof hud.spec.primary === 'function' ? hud.spec.primary() : hud.spec.primary;
+  const el = id ? document.getElementById(id) : null;
+  return el && el.offsetParent !== null ? el : null;
+}
+
+function typeIntoHudInput(el, key) {
+  if (!el.dataset.typing) {
+    el.value = '';
+    el.dataset.typing = 'true';
+  }
+  el.focus();
+  const pos = el.selectionStart ?? el.value.length;
+  const val = el.value;
+  el.value = val.slice(0, pos) + key + val.slice(pos);
+  // Inputs numéricos não suportam setSelectionRange; o cursor já fica no fim.
+  if (typeof el.selectionStart === 'number') el.setSelectionRange(pos + 1, pos + 1);
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  armHudIdle(el);
+}
+
+function hudTabMove(e, forward) {
+  const hud = activeHud();
+  if (!hud) return false;
+  const fields = hudFields(hud);
+  if (!fields.length) return false;
+  e.preventDefault();
+  const idx = fields.indexOf(document.activeElement);
+  const next = idx < 0
+    ? (forward ? 0 : fields.length - 1)
+    : (idx + (forward ? 1 : -1) + fields.length) % fields.length;
+  fields[next].focus();
+  return true;
+}
+
+function cycleHudTab(forward) {
+  const hud = activeHud();
+  if (!hud || !hud.spec.tab) return false;
+  const sel = document.getElementById(hud.spec.tab);
+  if (!sel || sel.tagName !== 'SELECT' || !sel.options.length) return false;
+  const i = (sel.selectedIndex + (forward ? 1 : -1) + sel.options.length) % sel.options.length;
+  sel.selectedIndex = i;
+  sel.dispatchEvent(new Event('change', { bubbles: true }));
+  // Se o campo focado sumiu na nova aba, vai para o primeiro parâmetro visível.
+  const ae = document.activeElement;
+  if (!ae || ae === document.body || ae.offsetParent === null) {
+    const first = hudFields(activeHud() || hud)[0];
+    if (first) first.focus();
+  }
+  return true;
+}
+
+const hudIdleTimers = new WeakMap();
+function armHudIdle(el) {
+  const prev = hudIdleTimers.get(el);
+  if (prev) clearTimeout(prev);
+  hudIdleTimers.set(el, setTimeout(() => {
+    el.dataset.typing = '';
+  }, HUD_IDLE_MS));
+}
+
+// Primeira tecla depois do foco (ou de uma pausa) zera o campo e começa novo valor.
+document.querySelectorAll('.hud-panel input[type="number"]').forEach(el => {
+  el.addEventListener('keydown', e => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (!/^[0-9.,-]$/.test(e.key)) return;
+    if (!el.dataset.typing) {
+      el.dataset.typing = 'true';
+      el.value = '';
+    }
+    armHudIdle(el);
+  });
+  el.addEventListener('input', () => { el.dataset.typing = 'true'; armHudIdle(el); });
+  el.addEventListener('blur', () => {
+    const t = hudIdleTimers.get(el);
+    if (t) clearTimeout(t);
+    hudIdleTimers.delete(el);
+    el.dataset.typing = '';
+  });
 });
 
-// Circle HUD - Enter/Escape e Tab entre campos
+// Circle HUD - Enter/Escape (Tab entre campos é tratado no handler global)
 ['circle-diameter-input', 'circle-cx-input', 'circle-cy-input',
  'circle-diameter-input-side', 'circle-start-x-input', 'circle-start-y-input'].forEach(id => {
   const el = document.getElementById(id);
