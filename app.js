@@ -6056,6 +6056,12 @@ function exportPDF() {
     A4:[21,29.7], A3:[29.7,42], A2:[42,59.4], A1:[59.4,84.1], A0:[84.1,118.9]
   };
 
+  // Área de trabalho: dimensões configuradas no painel (cm).
+  let wsW = Number(state.workspace && state.workspace.w);
+  let wsH = Number(state.workspace && state.workspace.h);
+  if (!(wsW > 0)) wsW = DEFAULT_WORKSPACE_W;
+  if (!(wsH > 0)) wsH = DEFAULT_WORKSPACE_H;
+
   let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
   state.segments.forEach(s => {
     if (s.type === 'circle') {
@@ -6073,8 +6079,13 @@ function exportPDF() {
   });
 
   const trackW = maxX-minX, trackH = maxY-minY;
-  let pageW, pageH;
-  if (format === 'auto') {
+  let pageW, pageH, fixedScale = null;
+  if (format === 'workspace') {
+    // Página do tamanho exato da área de trabalho, desenhada em escala 1:1.
+    pageW = wsW;
+    pageH = wsH;
+    fixedScale = 1;
+  } else if (format === 'auto') {
     pageW = trackW + margin*2;
     pageH = trackH + margin*2;
   } else {
@@ -6082,10 +6093,16 @@ function exportPDF() {
     if (trackW > trackH && pageW < pageH) [pageW,pageH] = [pageH,pageW];
   }
 
-  const drawScale = Math.min((pageW-margin*2)/(trackW||1), (pageH-margin*2)/(trackH||1));
-  const offX = margin - minX*drawScale;
+  const drawScale = fixedScale !== null
+    ? fixedScale
+    : Math.min((pageW-margin*2)/(trackW||1), (pageH-margin*2)/(trackH||1));
+  // Na área de trabalho o desenho mantém as coordenadas do editor (origem no canto).
+  const offX = format === 'workspace' ? 0 : margin - minX*drawScale;
   // Y para cima no mundo: o maior Y fica no topo da página.
-  const offY = margin + maxY*drawScale;
+  const offY = format === 'workspace' ? pageH : margin + maxY*drawScale;
+
+  const clippedByWorkspace = format === 'workspace' &&
+    (minX < -1e-6 || minY < -1e-6 || maxX > wsW + 1e-6 || maxY > wsH + 1e-6);
 
   // Criar SVG
   const svgW = pageW, svgH = pageH; // cm
@@ -6253,9 +6270,13 @@ function exportPDF() {
   }
 
   // Rodapé
-  const footerY = (svgH - margin*0.4) * CM2SVG;
+  const footerPad = format === 'workspace' ? Math.max(0.4, margin) : margin;
+  const footerY = (svgH - footerPad*0.4) * CM2SVG;
   const footerColor = invert?'rgba(255,255,255,0.3)':'rgba(0,0,0,0.25)';
-  paths += `<text x="${(margin*CM2SVG).toFixed(0)}" y="${footerY.toFixed(0)}" font-family="Rajdhani,sans-serif" font-size="9" fill="${footerColor}">LaGrid CAD 2D · Formato ${format} · ${new Date().toLocaleDateString('pt-BR')}</text>`;
+  const formatLabel = format === 'workspace'
+    ? `Área de trabalho ${wsW}×${wsH} cm · 1:1`
+    : `Formato ${format}`;
+  paths += `<text x="${(footerPad*CM2SVG).toFixed(0)}" y="${footerY.toFixed(0)}" font-family="Rajdhani,sans-serif" font-size="9" fill="${footerColor}">LaGrid CAD 2D · ${formatLabel} · ${new Date().toLocaleDateString('pt-BR')}</text>`;
 
   const svgContent = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg"
@@ -6292,7 +6313,10 @@ function exportPDF() {
 </body>
 </html>`);
   win.document.close();
-  toast('Janela de impressão aberta · Salve como PDF', 'success');
+  toast(clippedByWorkspace
+    ? 'PDF 1:1 aberto · atenção: parte da pista está fora da área de trabalho'
+    : 'Janela de impressão aberta · Salve como PDF',
+    clippedByWorkspace ? 'warn' : 'success');
 }
 
 // ── MENU / BOTÕES ─────────────────────────────────────────
