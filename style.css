@@ -1298,6 +1298,7 @@ select.hud-input {
   height: 6px;
   background: repeating-conic-gradient(rgba(232,232,240,.4) 0% 25%, transparent 0% 50%) 0 0 / 6px 6px;
   z-index: 2;
+  pointer-events: none;
 }
 
 #logo-area {
@@ -1308,10 +1309,10 @@ select.hud-input {
 }
 
 #logo-mark {
-  width: 58px;
+  width: 74px;
   height: 100%;
   background: var(--red);
-  clip-path: polygon(0 0, 100% 0, calc(100% - 12px) 100%, 0 100%);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 14px) 100%, 0 100%);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1319,8 +1320,8 @@ select.hud-input {
 }
 
 #logo-mark .logo-svg {
-  width: 30px;
-  height: 28px;
+  width: 40px;
+  height: 37px;
   color: #fff;
   fill: currentColor;
   display: block;
