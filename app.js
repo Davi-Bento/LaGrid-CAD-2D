@@ -88,13 +88,16 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 
 // ── TRANSFORMS ───────────────────────────────────────────
+// Primeiro quadrante: origem no canto inferior esquerdo, X para a direita
+// e Y para cima. O mundo usa a mesma convenção do papel (Y cresce para cima);
+// a tela inverte o Y porque no canvas ele cresce para baixo.
 function w2s(wx, wy) {
   return { x: wx * PX_PER_CM * cam.scale + cam.x,
-           y: wy * PX_PER_CM * cam.scale + cam.y };
+           y: cam.y - wy * PX_PER_CM * cam.scale };
 }
 function s2w(sx, sy) {
   return { x: (sx - cam.x) / (PX_PER_CM * cam.scale),
-           y: (sy - cam.y) / (PX_PER_CM * cam.scale) };
+           y: (cam.y - sy) / (PX_PER_CM * cam.scale) };
 }
 function cm2px(cm) { return cm * PX_PER_CM * cam.scale; }
 
@@ -178,9 +181,9 @@ function segVertices(seg) {
 // ── QUADRANTES DO CÍRCULO (N/L/S/O) ──────────────────────
 const CIRCLE_SIDES = {
   E: { dx:  1, dy:  0, label: 'Leste', letter: 'L' },
-  N: { dx:  0, dy: -1, label: 'Norte', letter: 'N' },
+  N: { dx:  0, dy:  1, label: 'Norte', letter: 'N' },
   W: { dx: -1, dy:  0, label: 'Oeste', letter: 'O' },
-  S: { dx:  0, dy:  1, label: 'Sul',   letter: 'S' },
+  S: { dx:  0, dy: -1, label: 'Sul',   letter: 'S' },
 };
 const CIRCLE_SIDE_ORDER = ['E', 'N', 'W', 'S'];
 
@@ -209,9 +212,10 @@ function circleQuadrantAtScreen(sx, sy, maxPx = 12) {
   return best;
 }
 
+// Recebe um delta no mundo (Y para cima).
 function circleSideFromDelta(dx, dy) {
   if (Math.abs(dx) >= Math.abs(dy)) return dx >= 0 ? 'E' : 'W';
-  return dy >= 0 ? 'S' : 'N';
+  return dy >= 0 ? 'N' : 'S';
 }
 
 function pointOnCircleSide(center, radius, side) {
@@ -861,7 +865,7 @@ function buildSpiralPoints(anchorPoint, p) {
       r = p.r1 * Math.pow(dFactor, i);
     }
     const a = startRad - p.dir * i * dStep;   // dir=1 = horário visual
-    local.push({ x: r * Math.cos(a), y: -r * Math.sin(a) });
+    local.push({ x: r * Math.cos(a), y: r * Math.sin(a) });
   }
 
   // Cauda tangente, mas sempre alinhada aos eixos: horizontal (deitada) ou
@@ -2761,8 +2765,8 @@ function pasteAnchorPoints(segs) {
   if (last) {
     if (last.type === 'circle') {
       const c = last.points[0], r = last.radius;
-      push({ x: c.x, y: c.y - r }, 'topo');
-      push({ x: c.x, y: c.y + r }, 'baixo');
+      push({ x: c.x, y: c.y + r }, 'topo');
+      push({ x: c.x, y: c.y - r }, 'baixo');
     } else {
       push(last.points[last.points.length - 1], 'fim');
     }
@@ -2846,10 +2850,10 @@ function cancelPaste() {
 
 // ── BIBLIOTECA DE CURVAS ─────────────────────────────────
 // Cada curva é montada com linhas e arcos de 3 pontos do próprio editor.
-// A geometria é escrita em coordenadas matemáticas (Y para cima) e convertida
-// para o mundo do editor (Y para baixo) por libPt().
+// A geometria é escrita em coordenadas matemáticas (Y para cima), que agora
+// coincidem com o mundo do editor no primeiro quadrante.
 
-function libPt(x, y) { return { x, y: -y }; }
+function libPt(x, y) { return { x, y }; }
 
 function libLine(x0, y0, x1, y1) {
   return { type: 'line', points: [libPt(x0, y0), libPt(x1, y1)] };
@@ -3307,7 +3311,7 @@ function jsNum(n) {
 }
 
 function segToCode(seg) {
-  const pts = seg.points.map(p => `libPt(${jsNum(p.x)}, ${jsNum(-p.y)})`).join(', ');
+  const pts = seg.points.map(p => `libPt(${jsNum(p.x)}, ${jsNum(p.y)})`).join(', ');
   if (seg.type === 'circle') {
     return `    { type: 'circle', points: [${pts}], radius: ${jsNum(seg.radius)} },`;
   }
@@ -3557,7 +3561,7 @@ function applyPrecisionMove() {
 
   const rad = angle * Math.PI / 180;
   const dx  = dist * Math.cos(rad);
-  const dy  = -dist * Math.sin(rad); // Y invertido no canvas
+  const dy  = dist * Math.sin(rad); // Y para cima (primeiro quadrante)
 
   saveUndo();
   state.segments.forEach(seg => {
@@ -3675,19 +3679,21 @@ function drawGridLines(cellPx) {
 }
 
 function drawWorkspaceBorder() {
-  const tl = w2s(0, 0);
-  const br = w2s(state.workspace.w, state.workspace.h);
+  const a = w2s(0, 0);
+  const b = w2s(state.workspace.w, state.workspace.h);
+  const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x);
+  const y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
   ctx.strokeStyle = 'rgba(232,0,61,0.35)';
   ctx.lineWidth   = 1.5;
   ctx.setLineDash([6, 4]);
-  ctx.strokeRect(tl.x, tl.y, br.x-tl.x, br.y-tl.y);
+  ctx.strokeRect(x0, y0, x1-x0, y1-y0);
   ctx.setLineDash([]);
 
   ctx.font = `${Math.max(9, 11*cam.scale)}px JetBrains Mono, monospace`;
   ctx.fillStyle = 'rgba(232,0,61,0.5)';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'bottom';
-  ctx.fillText(`${state.workspace.w}×${state.workspace.h} cm`, tl.x+4, tl.y-3);
+  ctx.fillText(`${state.workspace.w}×${state.workspace.h} cm`, x0+4, y0-3);
 }
 
 function drawDeadzone(violations) {
@@ -3696,14 +3702,16 @@ function drawDeadzone(violations) {
   if (countEl) countEl.textContent = violations.length;
   if (r.dz <= 0) return;
 
-  const tl = w2s(r.x0, r.y0);
-  const br = w2s(r.x1, r.y1);
+  const a = w2s(r.x0, r.y0);
+  const b = w2s(r.x1, r.y1);
+  const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x);
+  const y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
   const alert = violations.length > 0;
   ctx.save();
   ctx.strokeStyle = alert ? 'rgba(255,71,87,0.65)' : 'rgba(255,200,0,0.28)';
   ctx.lineWidth   = alert ? 1.5 : 1;
   ctx.setLineDash([4, 5]);
-  ctx.strokeRect(tl.x, tl.y, br.x-tl.x, br.y-tl.y);
+  ctx.strokeRect(x0, y0, x1-x0, y1-y0);
   ctx.setLineDash([]);
 
   ctx.font = `${Math.max(8, 9*cam.scale)}px JetBrains Mono, monospace`;
@@ -3713,7 +3721,7 @@ function drawDeadzone(violations) {
   const label = alert
     ? `DEADZONE ${r.dz} cm · ${violations.length} trecho(s)`
     : `Zona de segurança ${r.dz} cm`;
-  ctx.fillText(label, tl.x+4, tl.y-3);
+  ctx.fillText(label, x0+4, y0-3);
   ctx.restore();
 }
 
@@ -4486,7 +4494,7 @@ function drawDashedLine(a, b, color) {
 
 function drawMeasureLabel(a, b) {
   const dist = Math.hypot(b.x-a.x, b.y-a.y);
-  const ang  = ((Math.atan2(-(b.y-a.y), b.x-a.x) * 180/Math.PI) + 360) % 360;
+  const ang  = ((Math.atan2(b.y-a.y, b.x-a.x) * 180/Math.PI) + 360) % 360;
   const sp0 = w2s(a.x, a.y), sp1 = w2s(b.x, b.y);
   ctx.font = '10px JetBrains Mono, monospace';
   ctx.fillStyle = 'rgba(255,255,255,0.55)';
@@ -4525,6 +4533,21 @@ function doZoom(factor, cx, cy) {
   render();
 }
 
+function fitWorkspace() {
+  const pad = 50;
+  const bw  = state.workspace.w * PX_PER_CM;
+  const bh  = state.workspace.h * PX_PER_CM;
+  const sw  = canvas.width  - pad*2;
+  const sh  = canvas.height - pad*2;
+  const sc  = Math.min(sw/(bw||1), sh/(bh||1), 10);
+  cam.scale = sc;
+  cam.x = pad + (sw-bw*sc)/2;
+  // Primeiro quadrante: a origem (0,0) fica na base da área de trabalho.
+  cam.y = pad + (sh-bh*sc)/2 + state.workspace.h * PX_PER_CM * sc;
+  updateZoomDisplay();
+  render();
+}
+
 function fitView() {
   let minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
   const exp = (x,y) => {
@@ -4551,7 +4574,8 @@ function fitView() {
   const sc  = Math.min(sw/(bw||1), sh/(bh||1), 10);
   cam.scale = sc;
   cam.x = pad + (sw-bw*sc)/2 - minX*PX_PER_CM*sc;
-  cam.y = pad + (sh-bh*sc)/2 - minY*PX_PER_CM*sc;
+  // Y para cima: o maior Y do mundo fica no topo da tela.
+  cam.y = pad + (sh-bh*sc)/2 + maxY*PX_PER_CM*sc;
   updateZoomDisplay();
   render();
 }
@@ -4631,7 +4655,7 @@ function onMouseMove(e) {
     if (!ui.circleCenter) {
       if (prevScreen) {
         const dx = sx - prevScreen.x, dy = sy - prevScreen.y;
-        if (Math.hypot(dx, dy) >= 3) ui.circleSide = circleSideFromDelta(dx, dy);
+        if (Math.hypot(dx, dy) >= 3) ui.circleSide = circleSideFromDelta(dx, -dy);
       }
     } else {
       const dx = wp.x - ui.circleCenter.x, dy = wp.y - ui.circleCenter.y;
@@ -5019,8 +5043,8 @@ function onKeyDown(e) {
     case 'F5': e.preventDefault(); runTrackAnalysis(); break;
     case 'F9': e.preventDefault(); toggleDistSnap(); break;
     case 'Home':
-      cam.x = canvas.width/2; cam.y = canvas.height/2; cam.scale = 1;
-      updateZoomDisplay(); render();
+      e.preventDefault();
+      fitWorkspace();
       break;
   }
 }
@@ -5133,7 +5157,7 @@ function updatePolarHud() {
   const dx = eff.x - ui.lineStart.x;
   const dy = eff.y - ui.lineStart.y;
   const dist = Math.hypot(dx, dy);
-  const ang = ((Math.atan2(-dy, dx) * 180/Math.PI) + 360) % 360;
+  const ang = ((Math.atan2(dy, dx) * 180/Math.PI) + 360) % 360;
 
   if (ui.polarInputMode === 'polar') {
     const distIn = document.getElementById('polar-dist-input');
@@ -5304,7 +5328,7 @@ function commitLineHud() {
 
     const rad  = angle * Math.PI / 180;
     endX = startX + dist * Math.cos(rad);
-    endY = startY - dist * Math.sin(rad);
+    endY = startY + dist * Math.sin(rad);
   } else {
     endX = parseFloat(document.getElementById('polar-end-x-input').value);
     endY = parseFloat(document.getElementById('polar-end-y-input').value);
@@ -5473,7 +5497,8 @@ document.getElementById('line-width-input').addEventListener('change', () => {
 function saveJSON() {
   const sp = readSpiralParams();
   const data = JSON.stringify({
-    version:   10,
+    version:   11,
+    yUp:       true,
     segments:  state.segments,
     nodes:     state.nodes,
     nextId:    state.nextId,
@@ -5501,11 +5526,39 @@ function saveJSON() {
   toast('JSON salvo', 'success');
 }
 
+// Projetos antigos foram salvos com Y para baixo (origem no topo). Ao abrir no
+// novo sistema (primeiro quadrante, Y para cima), espelha o Y em torno da
+// altura da área de trabalho para o desenho continuar com o mesmo formato.
+function migrateProjectToYUp(d) {
+  if (!d || d.yUp === true) return;
+  const wsH = (d.workspace && d.workspace.h > 0) ? d.workspace.h : null;
+
+  let maxY = -Infinity;
+  const scan = p => {
+    if (p && Number.isFinite(p.x) && Number.isFinite(p.y)) maxY = Math.max(maxY, p.y);
+  };
+  const eachPoint = fn => {
+    (d.segments || []).forEach(s => {
+      (s.points || []).forEach(fn);
+      if (s.startPoint) fn(s.startPoint);
+      if (s.originalCircle && s.originalCircle.c) fn(s.originalCircle.c);
+    });
+    ['start', 'end'].forEach(k => { if (d.nodes && d.nodes[k]) fn(d.nodes[k]); });
+  };
+
+  eachPoint(scan);
+  const refH = wsH || (isFinite(maxY) ? maxY : 0);
+  eachPoint(p => { if (p && Number.isFinite(p.y)) p.y = refH - p.y; });
+
+  d.yUp = true;
+}
+
 function loadJSON(file) {
   const reader = new FileReader();
   reader.onload = e => {
     try {
       const d = JSON.parse(e.target.result);
+      migrateProjectToYUp(d);
       saveUndo();
       state.segments  = d.segments  || [];
       state.nodes     = d.nodes     || { start:null, end:null };
@@ -5685,14 +5738,15 @@ function exportPDF() {
 
   const drawScale = Math.min((pageW-margin*2)/(trackW||1), (pageH-margin*2)/(trackH||1));
   const offX = margin - minX*drawScale;
-  const offY = margin - minY*drawScale;
+  // Y para cima no mundo: o maior Y fica no topo da página.
+  const offY = margin + maxY*drawScale;
 
   // Criar SVG
   const svgW = pageW, svgH = pageH; // cm
   const CM2SVG = 37.795; // 96dpi
 
   function toSVG(x, y) {
-    return { x:(x*drawScale+offX)*CM2SVG, y:(y*drawScale+offY)*CM2SVG };
+    return { x:(x*drawScale+offX)*CM2SVG, y:(offY-y*drawScale)*CM2SVG };
   }
 
   const bg   = invert ? '#000000' : '#ffffff';
@@ -5781,7 +5835,7 @@ function exportPDF() {
     // Converte SVG (px) de volta para o mundo (cm), para medir folga.
     const svg2world = (sx, sy) => ({
       x: (sx / CM2SVG - offX) / drawScale,
-      y: (sy / CM2SVG - offY) / drawScale,
+      y: (offY - sy / CM2SVG) / drawScale,
     });
 
     for (const seg of state.segments) {
@@ -6026,8 +6080,7 @@ document.getElementById('btn-coord-none').addEventListener('click', () => {
   toast('Coordenadas desmarcadas');
 });
 document.getElementById('btn-zoom-reset').addEventListener('click', () => {
-  cam.x = canvas.width/2; cam.y = canvas.height/2; cam.scale = 1;
-  updateZoomDisplay(); render();
+  fitWorkspace();
 });
 document.getElementById('btn-toggle-grid').addEventListener('click', () => {
   state.showGrid = !state.showGrid;
@@ -6285,9 +6338,7 @@ function toast(msg, type='') {
 
 // ── INIT ─────────────────────────────────────────────────
 resizeCanvas();
-cam.x = canvas.width  / 2;
-cam.y = canvas.height / 2;
-cam.scale = 1;
+fitWorkspace();
 updateZoomDisplay();
 updatePanelInfo();
 updateDijkstraPanel();

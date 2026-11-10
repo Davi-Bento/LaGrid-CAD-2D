@@ -217,12 +217,11 @@
     const wsH = ws ? num(ws.h) : 0;
     const hasWs = wsW > 0 && wsH > 0;
 
-    const yUp = originMode === 'workspace';
-    const refX = hasWs ? 0 : eb.minX;
-    const refH = hasWs ? wsH : eb.maxY;
-    const tr = p => yUp
-      ? { x: p.x - refX, y: refH - p.y }
-      : { x: p.x, y: p.y };
+    // O editor agora trabalha no primeiro quadrante (Y para cima, origem no
+    // canto inferior esquerdo), então as coordenadas do gabarito coincidem com
+    // as coordenadas mostradas no editor.
+    const yUp = true;
+    const tr = p => ({ x: p.x, y: p.y });
 
     const curves = [];
     const straights = [];
@@ -331,8 +330,8 @@
           width: wsW, height: wsH,
         }
       : {
-          minX: -lineWidth / 2, minY: -lineWidth / 2,
-          maxX: b.width + lineWidth / 2, maxY: b.height + lineWidth / 2,
+          minX: b.minX - lineWidth / 2, minY: b.minY - lineWidth / 2,
+          maxX: b.maxX + lineWidth / 2, maxY: b.maxY + lineWidth / 2,
           width: b.width + lineWidth, height: b.height + lineWidth,
         };
 
