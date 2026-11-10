@@ -72,6 +72,16 @@
     return kind === 'circle' ? 'Círculo' : 'Arco';
   }
 
+  function originLabel(data) {
+    return data.origin === 'editor'
+      ? 'coordenadas do editor'
+      : 'canto inferior esquerdo da área de trabalho';
+  }
+
+  function summaryText(data) {
+    return `Área ${fmt(data.area.width)} x ${fmt(data.area.height)} cm · pista ${fmt(data.bounds.width)} x ${fmt(data.bounds.height)} cm · ${data.counts.curves} curvas · ${data.counts.straights} retas · ${data.counts.guides} guias`;
+  }
+
   function guideLabel(kind) {
     if (kind === 'construction') return 'Guia de construção';
     if (kind === 'axis') return 'Eixo do centro';
@@ -188,7 +198,7 @@
 
   function buildAssemblyData(opts) {
     opts = opts || {};
-    const originMode = opts.origin === 'editor' ? 'editor' : 'track';
+    const originMode = opts.origin === 'editor' ? 'editor' : 'workspace';
     const showGuides = opts.guides !== false;
     const showAxes = opts.axes !== false;
 
@@ -199,9 +209,18 @@
     const eb = trackEditorBounds(trackSegs);
     if (!eb) return null;
 
-    const yUp = originMode === 'track';
+    // Área de trabalho definida no editor — é a referência de tamanho e de
+    // coordenadas do gabarito. Sem workspace válido, usa os limites da pista.
+    const ws = (typeof state !== 'undefined' && state.workspace) ? state.workspace : null;
+    const wsW = ws ? num(ws.w) : 0;
+    const wsH = ws ? num(ws.h) : 0;
+    const hasWs = wsW > 0 && wsH > 0;
+
+    const yUp = originMode === 'workspace';
+    const refX = hasWs ? 0 : eb.minX;
+    const refH = hasWs ? wsH : eb.maxY;
     const tr = p => yUp
-      ? { x: p.x - eb.minX, y: eb.maxY - p.y }
+      ? { x: p.x - refX, y: refH - p.y }
       : { x: p.x, y: p.y };
 
     const curves = [];
@@ -300,17 +319,37 @@
     b.width = b.maxX - b.minX;
     b.height = b.maxY - b.minY;
 
-    const guideMargin = Math.max(4, Math.min(b.width, b.height) * 0.06);
-    const viewPad = guideMargin + Math.max(2, Math.min(b.width, b.height) * 0.025);
+    const lineWidth = num(typeof state !== 'undefined' ? state.lineWidth : 1.9) || 1.9;
+
+    // Retângulo de referência do gabarito: a área de trabalho definida no
+    // editor. Sem workspace válido, usa a pista com folga de meia fita para a
+    // borda não cortar a faixa.
+    const area = hasWs
+      ? {
+          minX: 0, minY: 0, maxX: wsW, maxY: wsH,
+          width: wsW, height: wsH,
+        }
+      : {
+          minX: -lineWidth / 2, minY: -lineWidth / 2,
+          maxX: b.width + lineWidth / 2, maxY: b.height + lineWidth / 2,
+          width: b.width + lineWidth, height: b.height + lineWidth,
+        };
+
+    const refW = Math.min(area.width, area.height);
+    const viewPad = Math.max(4, refW * 0.06);
+    const ux0 = Math.min(area.minX, b.minX);
+    const uy0 = Math.min(area.minY, b.minY);
+    const ux1 = Math.max(area.maxX, b.maxX);
+    const uy1 = Math.max(area.maxY, b.maxY);
     const view = {
-      x0: b.minX - viewPad, y0: b.minY - viewPad,
-      x1: b.maxX + viewPad, y1: b.maxY + viewPad,
-      width: b.width + viewPad * 2,
-      height: b.height + viewPad * 2,
+      x0: ux0 - viewPad, y0: uy0 - viewPad,
+      x1: ux1 + viewPad, y1: uy1 + viewPad,
+      width: (ux1 - ux0) + viewPad * 2,
+      height: (uy1 - uy0) + viewPad * 2,
     };
     const clip = {
-      x0: b.minX - guideMargin, y0: b.minY - guideMargin,
-      x1: b.maxX + guideMargin, y1: b.maxY + guideMargin,
+      x0: area.minX, y0: area.minY,
+      x1: area.maxX, y1: area.maxY,
     };
 
     // ── GUIAS ────────────────────────────────────────────
@@ -324,14 +363,18 @@
     }
     if (showAxes) {
       for (const a of axis) {
-        candidates.push({
-          kind: 'axis', priority: 1, order: order++,
-          x1: clip.x0, y1: a.y, x2: clip.x1, y2: a.y,
-        });
-        candidates.push({
-          kind: 'axis', priority: 1, order: order++,
-          x1: a.x, y1: clip.y0, x2: a.x, y2: clip.y1,
-        });
+        if (a.y >= clip.y0 && a.y <= clip.y1) {
+          candidates.push({
+            kind: 'axis', priority: 1, order: order++,
+            x1: clip.x0, y1: a.y, x2: clip.x1, y2: a.y,
+          });
+        }
+        if (a.x >= clip.x0 && a.x <= clip.x1) {
+          candidates.push({
+            kind: 'axis', priority: 1, order: order++,
+            x1: a.x, y1: clip.y0, x2: a.x, y2: clip.y1,
+          });
+        }
       }
     }
     if (showGuides) {
@@ -364,10 +407,11 @@
       dateBR: DATE_BR,
       origin: originMode,
       yUp,
-      lineWidth: num(typeof state !== 'undefined' ? state.lineWidth : 1.9) || 1.9,
+      lineWidth,
+      workspace: hasWs ? { width: wsW, height: wsH } : null,
+      area,
       bounds: b,
       view,
-      guideMargin,
       track,
       curves,
       straights,
@@ -462,7 +506,7 @@
 
     out.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${n(vp.pageW)} ${n(vp.pageH)}"${mode === 'preview' ? ' width="100%"' : ` width="${n(vp.pageW)}mm" height="${n(vp.pageH)}mm"`} preserveAspectRatio="xMidYMid meet">`);
     out.push(`<title>Gabarito de Montagem — LineTrack CAD</title>`);
-    out.push(`<desc>Pista ${fmt(data.bounds.width)} x ${fmt(data.bounds.height)} cm; ${data.counts.curves} curvas; ${data.counts.straights} retas; ${data.counts.guides} guias.</desc>`);
+    out.push(`<desc>${esc(summaryText(data))}.</desc>`);
     out.push(`<rect x="0" y="0" width="${n(vp.pageW)}" height="${n(vp.pageH)}" fill="#ffffff"/>`);
 
     // Guias
@@ -505,12 +549,12 @@
     // Cabeçalho nas páginas exportadas
     if (mode === 'a4') {
       out.push(`<text x="${n(vp.ox > 4 ? vp.ox : 9)}" y="6.2" font-family="${vp.font}" font-size="4.2" font-weight="700" fill="${COLORS.label}">GABARITO DE MONTAGEM</text>`);
-      out.push(`<text x="${n(vp.ox > 4 ? vp.ox : 9)}" y="10.4" font-family="${vp.font}" font-size="2.35" fill="${COLORS.labelSub}">Pista ${fmt(data.bounds.width)} x ${fmt(data.bounds.height)} cm · ${data.counts.curves} curvas · ${data.counts.straights} retas · ${data.counts.guides} guias</text>`);
+      out.push(`<text x="${n(vp.ox > 4 ? vp.ox : 9)}" y="10.4" font-family="${vp.font}" font-size="2.35" fill="${COLORS.labelSub}">${esc(summaryText(data))}</text>`);
       out.push(`<text x="${n(vp.pageW - 9)}" y="6.2" text-anchor="end" font-family="${vp.font}" font-size="2.2" fill="${COLORS.footer}">A4 paisagem · ${DATE_BR}</text>`);
-      out.push(`<text x="${n(vp.pageW / 2)}" y="${n(vp.pageH - 3)}" text-anchor="middle" font-family="${vp.font}" font-size="1.9" fill="${COLORS.footer}">LineTrack CAD · medidas em cm · origem: ${data.origin === 'track' ? 'canto inferior esquerdo da pista' : 'coordenadas do editor'}</text>`);
+      out.push(`<text x="${n(vp.pageW / 2)}" y="${n(vp.pageH - 3)}" text-anchor="middle" font-family="${vp.font}" font-size="1.9" fill="${COLORS.footer}">LineTrack CAD · medidas em cm · origem: ${esc(originLabel(data))}</text>`);
     } else if (mode === 'real') {
       out.push(`<text x="18" y="34" font-family="${vp.font}" font-size="22" font-weight="700" fill="${COLORS.label}">GABARITO DE MONTAGEM — 1:1</text>`);
-      out.push(`<text x="18" y="64" font-family="${vp.font}" font-size="12" fill="${COLORS.labelSub}">Pista ${fmt(data.bounds.width)} x ${fmt(data.bounds.height)} cm · ${data.counts.curves} curvas · ${data.counts.straights} retas · ${data.counts.guides} guias</text>`);
+      out.push(`<text x="18" y="64" font-family="${vp.font}" font-size="12" fill="${COLORS.labelSub}">${esc(summaryText(data))}</text>`);
       out.push(`<text x="18" y="${n(vp.pageH - 14)}" font-family="${vp.font}" font-size="7" fill="${COLORS.footer}">LineTrack CAD · 1 cm no papel = 1 cm na pista · ${DATE_BR}</text>`);
     }
 
@@ -519,7 +563,7 @@
   }
 
   function appendSvgBorder(out, data, vp, map) {
-    const b = data.bounds;
+    const b = data.area;
     const p1 = map(b.minX, b.minY), p2 = map(b.maxX, b.maxY);
     const x0 = Math.min(p1.x, p2.x), x1 = Math.max(p1.x, p2.x);
     const y0 = Math.min(p1.y, p2.y), y1 = Math.max(p1.y, p2.y);
@@ -683,7 +727,7 @@
         x: vp.side, y: vp.pageH - 1.9 * PT_PER_CM,
         size: 32, font: bold, color: col(COLORS.label),
       });
-      page.drawText(`Pista ${fmt(data.bounds.width)} x ${fmt(data.bounds.height)} cm · ${data.counts.curves} curvas · ${data.counts.straights} retas · ${data.counts.guides} guias`, {
+      page.drawText(summaryText(data), {
         x: vp.side, y: vp.pageH - 3.0 * PT_PER_CM,
         size: 15, font, color: col(COLORS.labelSub),
       });
@@ -691,7 +735,7 @@
       page.drawText('GABARITO DE MONTAGEM', {
         x: 26, y: vp.pageH - 26, size: 15.5, font: bold, color: col(COLORS.label),
       });
-      page.drawText(`Pista ${fmt(data.bounds.width)} x ${fmt(data.bounds.height)} cm · ${data.counts.curves} curvas · ${data.counts.straights} retas · ${data.counts.guides} guias`, {
+      page.drawText(summaryText(data), {
         x: 26, y: vp.pageH - 39, size: 8.2, font, color: col(COLORS.labelSub),
       });
       const right = `A4 paisagem · ${DATE_BR}`;
@@ -759,8 +803,9 @@
     drawPDFLabels(ctx, page, data, vp, map);
 
     if (!vp.real) {
-      page.drawText(`LineTrack CAD · medidas em cm · origem: ${data.origin === 'track' ? 'canto inferior esquerdo da pista' : 'coordenadas do editor'}`, {
-        x: vp.pageW / 2 - font.widthOfTextAtSize(`LineTrack CAD · medidas em cm · origem: ${data.origin === 'track' ? 'canto inferior esquerdo da pista' : 'coordenadas do editor'}`, 6.4) / 2,
+      const footer = `LineTrack CAD · medidas em cm · origem: ${originLabel(data)}`;
+      page.drawText(footer, {
+        x: vp.pageW / 2 - font.widthOfTextAtSize(footer, 6.4) / 2,
         y: 10, size: 6.4, font, color: col(COLORS.footer),
       });
     } else {
@@ -773,7 +818,7 @@
 
   function drawPDFBorder(ctx, page, data, vp, map) {
     const { font, PDFLib } = ctx;
-    const b = data.bounds;
+    const b = data.area;
     const p1 = map(b.minX, b.minY), p2 = map(b.maxX, b.maxY);
     const x0 = Math.min(p1.x, p2.x), x1 = Math.max(p1.x, p2.x);
     const y0 = Math.min(p1.y, p2.y), y1 = Math.max(p1.y, p2.y);
@@ -901,7 +946,7 @@
     const newPage = () => {
       page = ctx.doc.addPage([842, 595]);
       y = 524;
-      drawTablePageTitle(ctx, page);
+      drawTablePageTitle(ctx, page, data);
     };
 
     const ensure = (need) => {
@@ -925,7 +970,7 @@
       y -= 10;
     };
 
-    drawTablePageTitle(ctx, page);
+    drawTablePageTitle(ctx, page, data);
 
     const curveRows = data.curves.map(c => [
       c.id, kindLabel(c.kind), fmt(c.r),
@@ -961,10 +1006,13 @@
     }
   }
 
-  function drawTablePageTitle(ctx, page) {
+  function drawTablePageTitle(ctx, page, data) {
     const col = hex => rgbOf(ctx.PDFLib, hex);
     page.drawText('TABELA DE MONTAGEM', { x: 26, y: 560, size: 14, font: ctx.bold, color: col(COLORS.label) });
-    page.drawText(`Medidas em cm · origem: ${ui.data && ui.data.origin === 'editor' ? 'coordenadas do editor' : 'canto inferior esquerdo da pista'} · ${DATE_BR}`, {
+    const info = data
+      ? `Área ${fmt(data.area.width)} x ${fmt(data.area.height)} cm · pista ${fmt(data.bounds.width)} x ${fmt(data.bounds.height)} cm · origem: ${originLabel(data)} · ${DATE_BR}`
+      : `Medidas em cm · ${DATE_BR}`;
+    page.drawText(info, {
       x: 26, y: 547, size: 7.2, font: ctx.font, color: col(COLORS.labelSub),
     });
   }
@@ -1058,8 +1106,9 @@
     const lines = [];
     const push = (...cells) => lines.push(cells.join(';'));
     push('GABARITO DE MONTAGEM');
+    push('Área de trabalho', `${fmt(data.area.width)} x ${fmt(data.area.height)} cm`);
     push('Pista', `${fmt(data.bounds.width)} x ${fmt(data.bounds.height)} cm`);
-    push('Origem', data.origin === 'track' ? 'Canto inferior esquerdo da pista' : 'Coordenadas do editor');
+    push('Origem', data.origin === 'editor' ? 'Coordenadas do editor' : 'Canto inferior esquerdo da área de trabalho');
     push('Gerado em', DATE_BR);
     push('');
     push('CURVAS');
@@ -1142,7 +1191,7 @@
 
   function getOptions() {
     return {
-      origin: (el('gab-origin') && el('gab-origin').value) === 'editor' ? 'editor' : 'track',
+      origin: (el('gab-origin') && el('gab-origin').value) === 'editor' ? 'editor' : 'workspace',
       guides: !(el('gab-show-guides') && !el('gab-show-guides').checked),
       axes: !(el('gab-show-axes') && !el('gab-show-axes').checked),
       table: !(el('gab-show-table') && !el('gab-show-table').checked),
@@ -1168,7 +1217,7 @@
     }
 
     if (sub) {
-      sub.textContent = `${fmt(data.bounds.width)} x ${fmt(data.bounds.height)} cm · ${data.counts.curves} curvas · ${data.counts.straights} retas · ${data.counts.guides} guias`;
+      sub.textContent = summaryText(data);
     }
 
     if (preview) {
