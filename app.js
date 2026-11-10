@@ -2936,7 +2936,100 @@ const TRACK_LIBRARY = [
   },
 ];
 
-let curveLibraryReady = false;
+// ── Curvas próprias ──────────────────────────────────────
+// As curvas do usuário ficam no localStorage: continuam disponíveis até o
+// navegador ser limpo ("resetado"), mesmo trocando de projeto. Também podem
+// ser exportadas como bloco de código para curvas/minhas-curvas.js.
+const CUSTOM_CURVES_KEY = 'linetrack.curveLibrary.v1';
+
+function isValidCurveSeg(seg) {
+  if (!seg || typeof seg.type !== 'string') return false;
+  if (!Array.isArray(seg.points) || !seg.points.length) return false;
+  if (!seg.points.every(p => p && Number.isFinite(p.x) && Number.isFinite(p.y))) return false;
+  if (seg.type === 'circle') return Number.isFinite(seg.radius) && seg.radius > 0;
+  if (seg.type === 'line' || seg.type === 'polyline') return seg.points.length >= 2;
+  if (seg.type === 'arc') return seg.points.length >= 3;
+  return false;
+}
+
+function cleanCurveSegs(segs) {
+  const out = [];
+  for (const seg of Array.isArray(segs) ? segs : []) {
+    if (!isValidCurveSeg(seg)) continue;
+    const clean = {
+      type: seg.type,
+      points: seg.points.map(p => ({ x: +p.x, y: +p.y })),
+    };
+    if (seg.type === 'circle') clean.radius = +seg.radius;
+    out.push(clean);
+  }
+  return out;
+}
+
+function loadCustomCurves() {
+  let raw;
+  try { raw = localStorage.getItem(CUSTOM_CURVES_KEY); } catch (_) { return []; }
+  if (!raw) return [];
+  let list;
+  try { list = JSON.parse(raw); } catch (_) { return []; }
+  if (!Array.isArray(list)) return [];
+
+  const out = [];
+  const seen = new Set();
+  for (const item of list) {
+    if (!item || typeof item !== 'object') continue;
+    const segs = cleanCurveSegs(item.segs);
+    if (!segs.length) continue;
+    const id = String(item.id || '').trim() || `custom-${Date.now()}-${out.length}`;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    out.push({
+      id,
+      name: String(item.name || 'Curva sem nome').slice(0, 60),
+      track: String(item.track || 'Minha pista').slice(0, 60),
+      segs,
+    });
+  }
+  return out;
+}
+
+function saveCustomCurves(list) {
+  try {
+    localStorage.setItem(CUSTOM_CURVES_KEY, JSON.stringify(list));
+    return true;
+  } catch (_) {
+    toast('Não foi possível salvar no navegador', 'warn');
+    return false;
+  }
+}
+
+function newCustomCurveId() {
+  return `custom-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function storedCurveItem(entry) {
+  return {
+    id: entry.id,
+    name: entry.name,
+    track: entry.track,
+    custom: true,
+    stored: true,
+    build: () => cleanCurveSegs(entry.segs),
+  };
+}
+
+// Biblioteca efetiva = curvas do código + curvas salvas no navegador.
+// Curvas vindas do código têm prioridade quando o id coincide.
+function libraryItems() {
+  const items = TRACK_LIBRARY.map(item => ({ ...item, stored: false }));
+  const ids = new Set(items.map(i => i.id));
+  for (const entry of loadCustomCurves()) {
+    if (ids.has(entry.id)) continue;
+    items.push(storedCurveItem(entry));
+    ids.add(entry.id);
+  }
+  return items;
+}
 
 function drawLibraryThumb(canvas, segs) {
   if (!canvas) return;
@@ -2998,31 +3091,312 @@ function drawLibraryThumb(canvas, segs) {
   }
 }
 
-function buildCurveLibraryGrid() {
-  const grid = document.getElementById('curve-library-grid');
-  if (!grid || curveLibraryReady) return;
-  for (const item of TRACK_LIBRARY) {
-    const card = document.createElement('button');
-    card.type = 'button';
-    card.className = 'lib-card';
-    card.dataset.curve = item.id;
-    card.title = `${item.name} — ${item.track}`;
+function curveCard(item) {
+  const card = document.createElement('div');
+  card.className = 'lib-card';
+  card.dataset.curve = item.id;
+  card.tabIndex = 0;
+  card.setAttribute('role', 'button');
+  card.title = `${item.name} — ${item.track}`;
 
-    const cv = document.createElement('canvas');
-    cv.className = 'lib-thumb';
-    const name = document.createElement('span');
-    name.className = 'lib-name';
-    name.textContent = item.name;
-    const track = document.createElement('span');
-    track.className = 'lib-track';
-    track.textContent = item.track;
+  const cv = document.createElement('canvas');
+  cv.className = 'lib-thumb';
+  const name = document.createElement('span');
+  name.className = 'lib-name';
+  name.textContent = item.name;
+  const track = document.createElement('span');
+  track.className = 'lib-track';
+  track.textContent = item.track;
+  card.append(cv, name, track);
 
-    card.append(cv, name, track);
-    card.addEventListener('click', () => insertLibraryCurve(item.id));
-    grid.appendChild(card);
-    drawLibraryThumb(cv, item.build());
+  if (item.custom) {
+    const badge = document.createElement('span');
+    badge.className = 'lib-badge';
+    badge.textContent = 'MEU';
+    card.appendChild(badge);
+
+    const actions = document.createElement('div');
+    actions.className = 'lib-card-actions';
+    const codeBtn = document.createElement('button');
+    codeBtn.type = 'button';
+    codeBtn.className = 'lib-btn lib-code-btn';
+    codeBtn.textContent = 'Código';
+    codeBtn.title = 'Gerar código para adicionar ao projeto';
+    actions.appendChild(codeBtn);
+
+    if (item.stored) {
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'lib-del';
+      del.textContent = '×';
+      del.title = 'Excluir esta curva';
+      actions.appendChild(del);
+    }
+    card.appendChild(actions);
   }
-  curveLibraryReady = true;
+
+  let segs = [];
+  try { segs = item.build(); } catch (_) { segs = []; }
+  drawLibraryThumb(cv, segs);
+
+  card.addEventListener('click', e => {
+    if (e.target.closest('.lib-del')) {
+      e.stopPropagation();
+      deleteCustomCurve(item.id);
+      return;
+    }
+    if (e.target.closest('.lib-code-btn')) {
+      e.stopPropagation();
+      showCurveCode(item);
+      return;
+    }
+    insertLibraryCurve(item.id);
+  });
+  card.addEventListener('keydown', e => {
+    if (e.target !== card) return;
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      insertLibraryCurve(item.id);
+    }
+  });
+  return card;
+}
+
+function renderCurveLibraryGrid() {
+  const grid = document.getElementById('curve-library-grid');
+  if (!grid) return;
+  grid.innerHTML = '';
+  for (const item of libraryItems()) grid.appendChild(curveCard(item));
+}
+
+function saveSelectionAsCurve() {
+  const nameEl = document.getElementById('custom-curve-name');
+  const trackEl = document.getElementById('custom-curve-track');
+  const name = ((nameEl && nameEl.value) || '').trim();
+  if (!name) {
+    toast('Dê um nome para a curva', 'warn');
+    if (nameEl) nameEl.focus();
+    return;
+  }
+  const picked = selectedSegs();
+  if (!picked.length) {
+    toast('Selecione os trechos da curva no desenho', 'warn');
+    return;
+  }
+
+  const segs = cleanCurveSegs(picked);
+  if (!segs.length) {
+    toast('A seleção não tem linhas ou arcos válidos', 'warn');
+    return;
+  }
+
+  // Normaliza em torno do centro da caixa delimitadora para guardar a
+  // geometria relativa. A inserção recoloca esse centro onde for clicado.
+  const anchor = segmentsAnchor(segs);
+  for (const seg of segs) {
+    for (const p of seg.points) {
+      p.x -= anchor.x;
+      p.y -= anchor.y;
+    }
+  }
+
+  const entry = {
+    id: newCustomCurveId(),
+    name: name.slice(0, 60),
+    track: (trackEl && trackEl.value.trim() || 'Minha pista').slice(0, 60),
+    segs,
+  };
+  const list = loadCustomCurves();
+  list.push(entry);
+  if (!saveCustomCurves(list)) return;
+
+  if (nameEl) nameEl.value = '';
+  if (trackEl) trackEl.value = '';
+  renderCurveLibraryGrid();
+  toast(`Curva "${entry.name}" salva`, 'success');
+  setStatus(`Curva "${entry.name}" salva em Minhas Curvas`);
+}
+
+function deleteCustomCurve(id) {
+  const list = loadCustomCurves();
+  const next = list.filter(c => c.id !== id);
+  if (next.length === list.length) return;
+  if (!saveCustomCurves(next)) return;
+  closeCurveCode();
+  renderCurveLibraryGrid();
+  toast('Curva excluída', 'success');
+}
+
+// ── Exportar / importar curvas como código ───────────────
+
+function jsNum(n) {
+  const v = Math.round(n * 1000) / 1000;
+  return Object.is(v, -0) ? '0' : String(v);
+}
+
+function segToCode(seg) {
+  const pts = seg.points.map(p => `libPt(${jsNum(p.x)}, ${jsNum(-p.y)})`).join(', ');
+  if (seg.type === 'circle') {
+    return `    { type: 'circle', points: [${pts}], radius: ${jsNum(seg.radius)} },`;
+  }
+  return `    { type: '${seg.type}', points: [${pts}] },`;
+}
+
+function curveCode(item) {
+  let segs = [];
+  try { segs = item.build(); } catch (_) { segs = []; }
+  return [
+    '// Curva salva no LineTrack — cole em curvas/minhas-curvas.js',
+    'TRACK_LIBRARY.push({',
+    `  id: ${JSON.stringify(String(item.id))},`,
+    `  name: ${JSON.stringify(String(item.name))},`,
+    `  track: ${JSON.stringify(String(item.track || 'Minha pista'))},`,
+    '  custom: true,',
+    '  build: () => ([',
+    ...segs.map(segToCode),
+    '  ]),',
+    '});',
+    '',
+  ].join('\n');
+}
+
+function customCurvesCode() {
+  const custom = libraryItems().filter(i => i.custom);
+  if (!custom.length) {
+    return '// Nenhuma curva própria salva ainda.\n// Use "Salvar seleção" na Biblioteca de Curvas do LineTrack.\n';
+  }
+  return custom.map(curveCode).join('\n');
+}
+
+let libCodeItem = null;
+
+function showCurveCode(item) {
+  const box = document.getElementById('curve-library-code');
+  const title = document.getElementById('lib-code-title');
+  const text = document.getElementById('lib-code-text');
+  if (!box || !text) return;
+  libCodeItem = item;
+  if (title) title.textContent = `${item.name} · código`;
+  text.textContent = curveCode(item);
+  box.classList.remove('hidden');
+  if (box.scrollIntoView) box.scrollIntoView({ block: 'nearest' });
+}
+
+function closeCurveCode() {
+  const box = document.getElementById('curve-library-code');
+  if (box) box.classList.add('hidden');
+  libCodeItem = null;
+}
+
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch (_) { /* cai no fallback */ }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch (_) {
+    return false;
+  }
+}
+
+function slugify(s) {
+  return String(s).normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40) || 'curva';
+}
+
+function downloadText(filename, text) {
+  const blob = new Blob([text], { type: 'text/javascript;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+function importCurveCode(code) {
+  const temp = [];
+  try {
+    const fn = new Function(
+      'TRACK_LIBRARY', 'libPt', 'libLine', 'libArc', 'libRoundedPath',
+      '"use strict";\n' + code
+    );
+    fn(temp, libPt, libLine, libArc, libRoundedPath);
+  } catch (err) {
+    toast('Arquivo inválido: ' + err.message, 'warn');
+    return 0;
+  }
+
+  const list = loadCustomCurves();
+  let added = 0;
+  for (const item of temp) {
+    if (!item || typeof item !== 'object' || typeof item.build !== 'function') continue;
+    let segs;
+    try { segs = cleanCurveSegs(item.build()); } catch (_) { continue; }
+    if (!segs.length) continue;
+
+    const anchor = segmentsAnchor(segs);
+    for (const seg of segs) {
+      for (const p of seg.points) {
+        p.x -= anchor.x;
+        p.y -= anchor.y;
+      }
+    }
+
+    let id = String(item.id || '').trim() || newCustomCurveId();
+    // Não sobrescreve curvas que já vêm do código do projeto.
+    if (TRACK_LIBRARY.some(i => i.id === id)) id = newCustomCurveId();
+
+    const entry = {
+      id,
+      name: String(item.name || 'Curva importada').slice(0, 60),
+      track: String(item.track || 'Minha pista').slice(0, 60),
+      segs,
+    };
+    const idx = list.findIndex(c => c.id === id);
+    if (idx >= 0) list[idx] = entry;
+    else list.push(entry);
+    added++;
+  }
+
+  if (!added) {
+    toast('Nenhuma curva encontrada no arquivo', 'warn');
+    return 0;
+  }
+  if (!saveCustomCurves(list)) return 0;
+  renderCurveLibraryGrid();
+  toast(`${added} curva(s) importada(s)`, 'success');
+  setStatus(`${added} curva(s) importada(s) para Minhas Curvas`);
+  return added;
+}
+
+async function handleCurveFile(file) {
+  if (!file) return;
+  try {
+    const text = await file.text();
+    importCurveCode(text);
+  } catch (_) {
+    toast('Não foi possível ler o arquivo', 'warn');
+  }
+  const input = document.getElementById('custom-curve-import');
+  if (input) input.value = '';
 }
 
 function openCurveLibrary() {
@@ -3035,7 +3409,7 @@ function openCurveLibrary() {
     render();
   }
   win.classList.remove('hidden');
-  buildCurveLibraryGrid();
+  renderCurveLibraryGrid();
   const btn = document.getElementById('btn-curve-library');
   if (btn) btn.classList.add('active');
   setStatus('Biblioteca de Curvas: escolha uma curva · Esc fecha');
@@ -3044,6 +3418,7 @@ function openCurveLibrary() {
 function closeCurveLibrary() {
   const win = document.getElementById('curve-library');
   if (win) win.classList.add('hidden');
+  closeCurveCode();
   const btn = document.getElementById('btn-curve-library');
   if (btn) btn.classList.remove('active');
 }
@@ -3070,7 +3445,7 @@ function scaleSegsAboutAnchor(segs, factor) {
 }
 
 function insertLibraryCurve(id) {
-  const item = TRACK_LIBRARY.find(i => i.id === id);
+  const item = libraryItems().find(i => i.id === id);
   if (!item) return;
   const scaleEl = document.getElementById('curve-library-scale');
   let factor = parseFloat(scaleEl && scaleEl.value);
@@ -4349,7 +4724,12 @@ function onKeyDown(e) {
   if (e.key === 'Escape') {
     e.preventDefault();
     const lib = document.getElementById('curve-library');
-    if (lib && !lib.classList.contains('hidden')) { closeCurveLibrary(); return; }
+    if (lib && !lib.classList.contains('hidden')) {
+      const code = document.getElementById('curve-library-code');
+      if (code && !code.classList.contains('hidden')) { closeCurveCode(); return; }
+      closeCurveLibrary();
+      return;
+    }
     if (cancelPaste()) return;
     if (cancelMoveDrag()) return;
     cancelCurrentTool();
@@ -5469,6 +5849,44 @@ document.querySelectorAll('.tool-btn[data-tool]').forEach(btn => {
 
 document.getElementById('btn-curve-library').addEventListener('click', toggleCurveLibrary);
 document.getElementById('curve-library-close').addEventListener('click', closeCurveLibrary);
+
+document.getElementById('custom-curve-save').addEventListener('click', saveSelectionAsCurve);
+['custom-curve-name', 'custom-curve-track'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      saveSelectionAsCurve();
+    }
+  });
+});
+document.getElementById('custom-curve-import-btn').addEventListener('click', () => {
+  const input = document.getElementById('custom-curve-import');
+  if (input) input.click();
+});
+document.getElementById('custom-curve-import').addEventListener('change', e => {
+  handleCurveFile(e.target.files && e.target.files[0]);
+});
+document.getElementById('custom-curve-download-all').addEventListener('click', () => {
+  const custom = libraryItems().filter(i => i.custom);
+  if (!custom.length) {
+    toast('Nenhuma curva própria para baixar', 'warn');
+    return;
+  }
+  downloadText('minhas-curvas.js', custom.map(curveCode).join('\n'));
+  toast('Arquivo minhas-curvas.js gerado', 'success');
+});
+document.getElementById('lib-code-copy').addEventListener('click', async () => {
+  const text = document.getElementById('lib-code-text').textContent || '';
+  if (await copyText(text)) toast('Código copiado', 'success');
+  else toast('Não foi possível copiar', 'warn');
+});
+document.getElementById('lib-code-download').addEventListener('click', () => {
+  if (!libCodeItem) return;
+  downloadText(`curva-${slugify(libCodeItem.name)}.js`, curveCode(libCodeItem));
+});
+document.getElementById('lib-code-close').addEventListener('click', closeCurveCode);
 
 document.getElementById('btn-undo').addEventListener('click', undo);
 document.getElementById('btn-redo').addEventListener('click', redo);

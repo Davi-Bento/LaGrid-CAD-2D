@@ -527,6 +527,92 @@ select.hud-input {
   font-size: 10px;
   color: var(--text-dim);
 }
+.lib-toolbar-spacer { flex: 1 1 auto; }
+
+.lib-btn {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition), background var(--transition);
+}
+.lib-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+.lib-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.lib-btn.primary:hover { color: #fff; filter: brightness(1.08); }
+
+.lib-add {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+  padding: 8px;
+  margin-bottom: 10px;
+}
+.lib-add-title {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+.lib-add-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 6px;
+}
+.lib-add-grid .hud-input { padding: 5px 8px; font-size: 12px; min-width: 0; }
+.lib-add-grid .hud-btn { padding: 6px 12px; white-space: nowrap; }
+.lib-add-hint {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 5px;
+}
+
+.lib-code {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  background: var(--bg-base);
+  margin-bottom: 10px;
+  overflow: hidden;
+}
+.lib-code-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border-bottom: 1px solid var(--border);
+}
+#lib-code-title {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+}
+.lib-code-spacer { flex: 1 1 auto; }
+.lib-code-text {
+  margin: 0;
+  padding: 8px;
+  max-height: 150px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  white-space: pre;
+  tab-size: 2;
+}
 
 .lib-grid {
   display: grid;
@@ -534,9 +620,12 @@ select.hud-input {
   gap: 8px;
   overflow-y: auto;
   padding-right: 2px;
+  flex: 1 1 auto;
+  min-height: 90px;
 }
 
 .lib-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -549,9 +638,51 @@ select.hud-input {
   text-align: left;
   transition: border-color var(--transition), background var(--transition);
 }
-.lib-card:hover {
+.lib-card:hover,
+.lib-card:focus-visible {
   border-color: var(--accent);
   background: var(--bg-hover);
+  outline: none;
+}
+.lib-badge {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-family: var(--font-mono);
+  font-size: 7.5px;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  background: var(--bg-panel);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 1px 3px;
+}
+.lib-card-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: 3px;
+}
+.lib-card-actions .lib-btn {
+  flex: 1 1 auto;
+  padding: 2px 4px;
+  font-size: 9px;
+}
+.lib-del {
+  flex: 0 0 22px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  transition: color var(--transition), background var(--transition), border-color var(--transition);
+}
+.lib-del:hover {
+  color: #fff;
+  background: #c62828;
+  border-color: #c62828;
 }
 .lib-thumb { width: 100%; height: 58px; display: block; }
 .lib-name {

@@ -549,7 +549,33 @@
         <label for="curve-library-scale">Escala</label>
         <input type="number" id="curve-library-scale" class="hud-input" value="1.0" step="0.1" min="0.1" max="5" />
         <span class="lib-scale-x">×</span>
+        <span class="lib-toolbar-spacer"></span>
+        <button id="custom-curve-import-btn" class="lib-btn" title="Importar um arquivo .js com curvas">Importar .js</button>
+        <button id="custom-curve-download-all" class="lib-btn" title="Baixar todas as minhas curvas em um arquivo">Baixar todas</button>
+        <input type="file" id="custom-curve-import" accept=".js,.txt,text/javascript,application/javascript" class="hidden" />
       </div>
+
+      <div class="lib-add">
+        <div class="lib-add-title">Minhas curvas</div>
+        <div class="lib-add-grid">
+          <input type="text" id="custom-curve-name" class="hud-input" placeholder="Nome da curva" maxlength="40" />
+          <input type="text" id="custom-curve-track" class="hud-input" placeholder="Pista (opcional)" maxlength="40" />
+          <button id="custom-curve-save" class="hud-btn primary">Salvar seleção</button>
+        </div>
+        <div class="lib-add-hint">Selecione no desenho os trechos (linhas/arcos) e salve como curva modelo. As curvas ficam no navegador; exporte como .js para fixar no projeto.</div>
+      </div>
+
+      <div id="curve-library-code" class="lib-code hidden">
+        <div class="lib-code-head">
+          <span id="lib-code-title">Código da curva</span>
+          <span class="lib-code-spacer"></span>
+          <button id="lib-code-copy" class="lib-btn">Copiar</button>
+          <button id="lib-code-download" class="lib-btn primary">Baixar .js</button>
+          <button id="lib-code-close" class="lib-close" title="Fechar código">×</button>
+        </div>
+        <pre id="lib-code-text" class="lib-code-text"></pre>
+      </div>
+
       <div id="curve-library-grid" class="lib-grid"></div>
       <div class="hud-hint">Clique numa curva → clique no desenho para inserir · Enter confirma · Esc cancela</div>
     </div>
@@ -727,5 +753,6 @@
   <input type="file" id="file-input" accept=".json" style="display:none" />
 
   <script src="app.js"></script>
+  <script src="curvas/minhas-curvas.js"></script>
 </body>
 </html>
