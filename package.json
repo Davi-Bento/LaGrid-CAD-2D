@@ -1,0 +1,12 @@
+{
+  "name": "lagrid-cad-2d",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Editor CAD 2D offline para pistas de seguidor de linha",
+  "scripts": {
+    "test": "node tests/run-all.js"
+  },
+  "devDependencies": {
+    "playwright": "1.65.0"
+  }
+}
