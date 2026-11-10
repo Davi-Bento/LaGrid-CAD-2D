@@ -830,7 +830,8 @@ select.hud-input {
   border-top: 3px solid;
 }
 .gab-chip.pista::before { border-color: #e8e8f0; border-top-width: 4px; }
-.gab-chip.guia::before { border-color: #7c8aa6; border-top-style: dashed; }
+.gab-chip.construcao::before { border-color: #7c8aa6; border-top-style: dashed; }
+.gab-chip.centro::before { border-color: #7c7c94; border-top-width: 1px; }
 .gab-chip.eixo::before { border-color: #e2a0b2; border-top-width: 1px; }
 .gab-chip.raio::before {
   border-color: #d9556d;

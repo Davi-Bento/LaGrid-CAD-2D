@@ -83,7 +83,7 @@
   }
 
   function guideLabel(kind) {
-    if (kind === 'construction') return 'Guia de construção';
+    if (kind === 'construction') return 'Linha de construção';
     if (kind === 'axis') return 'Eixo do centro';
     return 'Centro da reta';
   }
@@ -199,6 +199,7 @@
   function buildAssemblyData(opts) {
     opts = opts || {};
     const originMode = opts.origin === 'editor' ? 'editor' : 'workspace';
+    const showConstruction = opts.construction !== false;
     const showGuides = opts.guides !== false;
     const showAxes = opts.axes !== false;
 
@@ -355,7 +356,7 @@
     // ── GUIAS ────────────────────────────────────────────
     const candidates = [];
     let order = 0;
-    if (showGuides) {
+    if (showConstruction) {
       for (const g of construction) {
         const c = clipRect(g.a.x, g.a.y, g.b.x, g.b.y, clip.x0, clip.y0, clip.x1, clip.y1);
         if (c) candidates.push({ kind: 'construction', priority: 0, order: order++, ...c });
@@ -1192,6 +1193,7 @@
   function getOptions() {
     return {
       origin: (el('gab-origin') && el('gab-origin').value) === 'editor' ? 'editor' : 'workspace',
+      construction: !(el('gab-show-construction') && !el('gab-show-construction').checked),
       guides: !(el('gab-show-guides') && !el('gab-show-guides').checked),
       axes: !(el('gab-show-axes') && !el('gab-show-axes').checked),
       table: !(el('gab-show-table') && !el('gab-show-table').checked),
@@ -1201,7 +1203,7 @@
 
   function refreshGabarito() {
     const opts = getOptions();
-    const data = buildAssemblyData({ origin: opts.origin, guides: opts.guides, axes: opts.axes });
+    const data = buildAssemblyData({ origin: opts.origin, construction: opts.construction, guides: opts.guides, axes: opts.axes });
     ui.data = data;
 
     const sub = el('gabarito-subtitle');
@@ -1328,7 +1330,7 @@
   // ── AÇÕES ───────────────────────────────────────────────
   function currentData() {
     const opts = getOptions();
-    const data = buildAssemblyData({ origin: opts.origin, guides: opts.guides, axes: opts.axes });
+    const data = buildAssemblyData({ origin: opts.origin, construction: opts.construction, guides: opts.guides, axes: opts.axes });
     ui.data = data;
     return data;
   }
@@ -1402,7 +1404,7 @@
       b.addEventListener('click', () => setTab(b.dataset.gabTab));
     });
 
-    for (const id of ['gab-origin', 'gab-scale', 'gab-show-guides', 'gab-show-axes']) {
+    for (const id of ['gab-origin', 'gab-scale', 'gab-show-construction', 'gab-show-guides', 'gab-show-axes']) {
       const c = el(id);
       if (c) c.addEventListener('change', refreshGabarito);
     }
