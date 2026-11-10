@@ -3142,7 +3142,7 @@ function drawLibraryThumb(canvas, segs) {
   const oy = (cssH - h * sc) / 2 - minY * sc;
   const tx = p => ({ x: p.x * sc + ox, y: p.y * sc + oy });
 
-  c.strokeStyle = '#e8003d';
+  c.strokeStyle = '#e3000f';
   c.lineWidth = 1.6;
   c.lineCap = 'round';
   c.lineJoin = 'round';
@@ -3625,7 +3625,7 @@ function angleBetweenSegs(segA, vA, segB, vB) {
 // ── RENDER ────────────────────────────────────────────────
 function render() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.fillStyle = '#0a0a0c';
+  ctx.fillStyle = '#08080f';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   if (state.showGrid)    drawGrid();
@@ -3648,18 +3648,18 @@ function drawGrid() {
   const majorPx = cm2px(10);
 
   if (minorPx > 5) {
-    ctx.strokeStyle = 'rgba(255,255,255,0.015)';
+    ctx.strokeStyle = 'rgba(232,232,240,0.02)';
     ctx.lineWidth = 0.5;
     drawGridLines(minorPx);
   }
   if (majorPx > 3) {
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+    ctx.strokeStyle = 'rgba(232,232,240,0.055)';
     ctx.lineWidth = 0.5;
     drawGridLines(majorPx);
   }
 
   const ox = w2s(0,0);
-  ctx.strokeStyle = 'rgba(232,0,61,0.2)';
+  ctx.strokeStyle = 'rgba(227,0,15,0.2)';
   ctx.lineWidth = 0.7;
   ctx.beginPath();
   ctx.moveTo(ox.x,0); ctx.lineTo(ox.x, canvas.height);
@@ -3683,14 +3683,14 @@ function drawWorkspaceBorder() {
   const b = w2s(state.workspace.w, state.workspace.h);
   const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x);
   const y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
-  ctx.strokeStyle = 'rgba(232,0,61,0.35)';
+  ctx.strokeStyle = 'rgba(227,0,15,0.35)';
   ctx.lineWidth   = 1.5;
   ctx.setLineDash([6, 4]);
   ctx.strokeRect(x0, y0, x1-x0, y1-y0);
   ctx.setLineDash([]);
 
   ctx.font = `${Math.max(9, 11*cam.scale)}px JetBrains Mono, monospace`;
-  ctx.fillStyle = 'rgba(232,0,61,0.5)';
+  ctx.fillStyle = 'rgba(227,0,15,0.5)';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'bottom';
   ctx.fillText(`${state.workspace.w}×${state.workspace.h} cm`, x0+4, y0-3);
@@ -3708,14 +3708,14 @@ function drawDeadzone(violations) {
   const y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
   const alert = violations.length > 0;
   ctx.save();
-  ctx.strokeStyle = alert ? 'rgba(255,71,87,0.65)' : 'rgba(255,200,0,0.28)';
+  ctx.strokeStyle = alert ? 'rgba(255,77,77,0.65)' : 'rgba(245,196,0,0.28)';
   ctx.lineWidth   = alert ? 1.5 : 1;
   ctx.setLineDash([4, 5]);
   ctx.strokeRect(x0, y0, x1-x0, y1-y0);
   ctx.setLineDash([]);
 
   ctx.font = `${Math.max(8, 9*cam.scale)}px JetBrains Mono, monospace`;
-  ctx.fillStyle = alert ? 'rgba(255,71,87,0.85)' : 'rgba(255,200,0,0.5)';
+  ctx.fillStyle = alert ? 'rgba(255,77,77,0.85)' : 'rgba(245,196,0,0.5)';
   ctx.textAlign = 'left';
   ctx.textBaseline = 'bottom';
   const label = alert
@@ -3728,11 +3728,11 @@ function drawDeadzone(violations) {
 function drawDeadzoneAlerts(violations) {
   if (!violations.length) return;
   ctx.save();
-  ctx.strokeStyle = 'rgba(255,71,87,0.35)';
+  ctx.strokeStyle = 'rgba(255,77,77,0.35)';
   ctx.lineWidth   = Math.max(6, cm2px(state.lineWidth) + 6);
   ctx.lineCap     = 'round';
   ctx.lineJoin    = 'round';
-  ctx.shadowColor = 'rgba(255,71,87,0.5)';
+  ctx.shadowColor = 'rgba(255,77,77,0.5)';
   ctx.shadowBlur  = 12;
   for (const seg of violations) strokeSegPath(seg);
   ctx.restore();
@@ -3750,7 +3750,7 @@ function drawSegments() {
     // Linha de construção — estilo próprio, não entra na faixa de largura
     if (isConstruction) {
       ctx.save();
-      ctx.strokeStyle = sel ? '#ff00ff' : '#ff00ffcc'; // magenta
+      ctx.strokeStyle = sel ? '#f5c400' : 'rgba(245,196,0,0.8)'; // magenta
       ctx.lineWidth   = Math.max(0.5, 0.75 * cam.scale);
       ctx.lineCap     = 'round';
       ctx.lineJoin    = 'round';
@@ -3767,10 +3767,10 @@ function drawSegments() {
     if (lineWidthPx > 2) {
       ctx.save();
       ctx.strokeStyle = sel
-        ? 'rgba(255,255,255,0.07)'
+        ? 'rgba(34,211,238,0.10)'
         : inPath
-          ? 'rgba(255,255,255,0.06)'
-          : 'rgba(74,158,255,0.05)';
+          ? 'rgba(245,196,0,0.08)'
+          : 'rgba(232,232,240,0.05)';
       ctx.lineWidth = lineWidthPx;
       ctx.lineCap   = 'round';
       ctx.lineJoin  = 'round';
@@ -3781,17 +3781,17 @@ function drawSegments() {
     // Linha central
     ctx.save();
     if (sel) {
-      ctx.strokeStyle = '#ffffff';
+      ctx.strokeStyle = '#22d3ee';
       ctx.lineWidth   = baseW + 1.5;
-      ctx.shadowColor = 'rgba(255,255,255,0.35)';
+      ctx.shadowColor = 'rgba(34,211,238,0.4)';
       ctx.shadowBlur  = 6;
     } else if (inPath) {
-      ctx.strokeStyle = '#ffffff';
+      ctx.strokeStyle = '#f5c400';
       ctx.lineWidth   = baseW + 1;
-      ctx.shadowColor = 'rgba(255,255,255,0.45)';
+      ctx.shadowColor = 'rgba(245,196,0,0.55)';
       ctx.shadowBlur  = 8;
     } else {
-      ctx.strokeStyle = '#4a9eff';
+      ctx.strokeStyle = '#e8e8f0';
       ctx.lineWidth   = baseW;
       ctx.shadowBlur  = 0;
     }
@@ -3852,13 +3852,13 @@ function drawEndpoints(seg, sel) {
     // anel externo
     ctx.beginPath();
     ctx.arc(sp.x, sp.y, sel ? 5 : 4, 0, Math.PI*2);
-    ctx.strokeStyle = sel ? '#ffffff' : 'rgba(74,158,255,0.6)';
+    ctx.strokeStyle = sel ? '#22d3ee' : 'rgba(34,211,238,0.6)';
     ctx.lineWidth   = 1.2;
     ctx.stroke();
     // ponto interno
     ctx.beginPath();
     ctx.arc(sp.x, sp.y, 2, 0, Math.PI*2);
-    ctx.fillStyle = sel ? '#ffffff' : '#4a9eff';
+    ctx.fillStyle = sel ? '#22d3ee' : '#e8e8f0';
     ctx.fill();
   });
 
@@ -3873,13 +3873,13 @@ function drawEndpoints(seg, sel) {
     ctx.lineTo(sp.x + size, sp.y);
     ctx.moveTo(sp.x, sp.y - size);
     ctx.lineTo(sp.x, sp.y + size);
-    ctx.strokeStyle = sel ? '#ffffff' : 'rgba(255,224,102,0.8)';
+    ctx.strokeStyle = sel ? '#22d3ee' : 'rgba(245,196,0,0.8)';
     ctx.lineWidth = sel ? 1.5 : 1;
     ctx.stroke();
     // Ponto central
     ctx.beginPath();
     ctx.arc(sp.x, sp.y, 2, 0, Math.PI*2);
-    ctx.fillStyle = sel ? '#ffffff' : '#ffe066';
+    ctx.fillStyle = sel ? '#22d3ee' : '#f5c400';
     ctx.fill();
   }
 }
@@ -3905,15 +3905,15 @@ function drawCircleQuadrants() {
       ctx.lineTo(sp.x, sp.y + rad);
       ctx.lineTo(sp.x - rad, sp.y);
       ctx.closePath();
-      ctx.fillStyle   = active ? 'rgba(255,224,102,0.95)' : 'rgba(10,10,12,0.75)';
+      ctx.fillStyle   = active ? 'rgba(245,196,0,0.95)' : 'rgba(10,10,12,0.75)';
       ctx.fill();
-      ctx.strokeStyle = active ? '#ffe066' : 'rgba(255,224,102,0.85)';
+      ctx.strokeStyle = active ? '#f5c400' : 'rgba(245,196,0,0.85)';
       ctx.lineWidth   = active ? 1.8 : 1.1;
       ctx.stroke();
 
       const s = CIRCLE_SIDES[q.side];
       ctx.font         = '700 9px "JetBrains Mono", ui-monospace, monospace';
-      ctx.fillStyle    = active ? '#ffe066' : 'rgba(255,224,102,0.7)';
+      ctx.fillStyle    = active ? '#f5c400' : 'rgba(245,196,0,0.7)';
       ctx.textAlign    = 'center';
       ctx.textBaseline = 'middle';
       ctx.fillText(s.letter, sp.x + s.dx * 11, sp.y + s.dy * 11);
@@ -3975,8 +3975,8 @@ function drawVertexHandles() {
 
       // Handle do vértice
       ctx.save();
-      ctx.fillStyle   = 'rgba(255,224,102,0.15)';
-      ctx.strokeStyle = '#ffe066';
+      ctx.fillStyle   = 'rgba(245,196,0,0.15)';
+      ctx.strokeStyle = '#f5c400';
       ctx.lineWidth   = 1;
       ctx.beginPath();
       ctx.rect(sp.x-4, sp.y-4, 8, 8);
@@ -3990,7 +3990,7 @@ function drawVertexHandles() {
       ctx.beginPath();
       ctx.arc(bp.x, bp.y, BADGE_R, 0, Math.PI * 2);
       if (on) {
-        ctx.fillStyle   = '#00cc66';
+        ctx.fillStyle   = '#22c55e';
         ctx.strokeStyle = '#eafff2';
       } else {
         ctx.fillStyle   = 'rgba(20,24,30,0.92)';
@@ -4087,8 +4087,8 @@ function drawVertexCoordLeader() {
     const ax = Math.max(L.bx + 5, Math.min(L.sp.x, L.bx + L.w - 5));
     const ay = Math.max(L.by + 5, Math.min(L.sp.y, L.by + L.h - 5));
 
-    ctx.strokeStyle = 'rgba(74,158,255,0.95)';
-    ctx.fillStyle   = 'rgba(74,158,255,0.95)';
+    ctx.strokeStyle = 'rgba(34,211,238,0.95)';
+    ctx.fillStyle   = 'rgba(34,211,238,0.95)';
     ctx.lineWidth   = 1.2;
     ctx.lineJoin    = 'round';
 
@@ -4117,12 +4117,12 @@ function drawVertexCoordLeader() {
     ctx.arcTo(L.bx, L.by, L.bx + r, L.by, r);
     ctx.closePath();
     ctx.fillStyle   = 'rgba(9,12,18,0.94)';
-    ctx.strokeStyle = 'rgba(74,158,255,0.95)';
+    ctx.strokeStyle = 'rgba(34,211,238,0.95)';
     ctx.lineWidth   = 1.1;
     ctx.fill();
     ctx.stroke();
 
-    ctx.fillStyle    = '#eaf2ff';
+    ctx.fillStyle    = '#fff5d6';
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
     ctx.font         = '600 12px "JetBrains Mono", ui-monospace, monospace';
@@ -4141,7 +4141,7 @@ function drawDimension(seg) {
   const ox = -dy/nd*14, oy = dx/nd*14;
   ctx.save();
   ctx.font = `${Math.max(8, 9*cam.scale)}px JetBrains Mono, monospace`;
-  ctx.fillStyle = 'rgba(255,255,255,0.28)';
+  ctx.fillStyle = 'rgba(245,196,0,0.60)';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(`${segLength(seg).toFixed(2)}cm`, mx+ox, my+oy);
@@ -4150,8 +4150,8 @@ function drawDimension(seg) {
 
 function drawNodes() {
   const configs = [
-    { key:'start', color:'#00ff87', label:'S' },
-    { key:'end',   color:'#ff4757', label:'E' },
+    { key:'start', color:'#22c55e', label:'S' },
+    { key:'end',   color:'#e3000f', label:'E' },
   ];
   for (const { key, color, label } of configs) {
     const n = state.nodes[key];
@@ -4195,14 +4195,14 @@ function drawCriticalAlerts() {
     const sp = w2s(c.pt.x, c.pt.y);
     ctx.beginPath();
     ctx.arc(sp.x, sp.y, 16, 0, Math.PI*2);
-    ctx.strokeStyle = '#ff6b35';
+    ctx.strokeStyle = '#ff4d4d';
     ctx.lineWidth   = 1.5;
-    ctx.shadowColor = '#ff6b35';
+    ctx.shadowColor = '#ff4d4d';
     ctx.shadowBlur  = 10;
     ctx.stroke();
     ctx.shadowBlur  = 0;
-    ctx.font = 'bold 9px Barlow Condensed, sans-serif';
-    ctx.fillStyle = '#ff6b35';
+    ctx.font = 'bold 9px Titillium Web, sans-serif';
+    ctx.fillStyle = '#ff4d4d';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(`${c.angle.toFixed(0)}°`, sp.x, sp.y-22);
@@ -4218,7 +4218,7 @@ function drawPreview() {
     const pm = ui.pasteMode;
     ctx.save();
     ctx.globalAlpha  = 0.6;
-    ctx.strokeStyle  = '#ffe066';
+    ctx.strokeStyle  = '#f5c400';
     ctx.lineWidth    = Math.max(0.5, 1.5 * cam.scale);
     ctx.lineCap      = 'round';
     ctx.lineJoin     = 'round';
@@ -4230,8 +4230,8 @@ function drawPreview() {
     ctx.restore();
     // Ponto de encaixe (âncora da colagem)
     const ap = w2s(pm.position.x, pm.position.y);
-    ctx.strokeStyle = '#ffe066';
-    ctx.fillStyle = '#ffe066';
+    ctx.strokeStyle = '#f5c400';
+    ctx.fillStyle = '#f5c400';
     ctx.lineWidth = 1.5;
     if (pm.anchor.kind === 'centro') {
       ctx.beginPath();
@@ -4249,13 +4249,13 @@ function drawPreview() {
 
   if (ui.tool === 'line' && ui.lineStart) {
     const end = ui.snapTarget ? pt : pointFromConstraint(ui.lineStart, pt);
-    drawDashedLine(ui.lineStart, end, 'rgba(74,158,255,0.45)');
+    drawDashedLine(ui.lineStart, end, 'rgba(34,211,238,0.45)');
     drawMeasureLabel(ui.lineStart, end);
   }
 
   if (ui.tool === 'polyline' && ui.polyPoints.length) {
     ctx.setLineDash([4,4]);
-    ctx.strokeStyle = 'rgba(74,158,255,0.45)';
+    ctx.strokeStyle = 'rgba(34,211,238,0.45)';
     ctx.lineWidth   = 1.5;
     ctx.lineCap     = 'round';
     ctx.beginPath();
@@ -4275,7 +4275,7 @@ function drawPreview() {
     ui.polyPoints.forEach(p => {
       const sp = w2s(p.x, p.y);
       ctx.beginPath(); ctx.arc(sp.x, sp.y, 3, 0, Math.PI*2);
-      ctx.fillStyle = '#4a9eff'; ctx.fill();
+      ctx.fillStyle = '#22d3ee'; ctx.fill();
     });
   }
 
@@ -4285,7 +4285,7 @@ function drawPreview() {
     if (pts.length > 1) {
       ctx.save();
       ctx.setLineDash([5, 4]);
-      ctx.strokeStyle = 'rgba(74,158,255,0.6)';
+      ctx.strokeStyle = 'rgba(34,211,238,0.6)';
       ctx.lineWidth   = 1.5;
       ctx.lineCap     = 'round';
       ctx.lineJoin    = 'round';
@@ -4300,13 +4300,13 @@ function drawPreview() {
       ctx.setLineDash([]);
       // Marca o centro (discreto) e o ponto de referência escolhido (destaque)
       const c = w2s(center.x, center.y);
-      ctx.fillStyle = 'rgba(255,255,255,0.35)';
+      ctx.fillStyle = 'rgba(34,211,238,0.4)';
       ctx.beginPath();
       ctx.arc(c.x, c.y, 2.5, 0, Math.PI * 2);
       ctx.fill();
 
       const r0 = w2s(ref.x, ref.y);
-      ctx.strokeStyle = '#ffe066';
+      ctx.strokeStyle = '#f5c400';
       ctx.lineWidth   = 1.5;
       ctx.beginPath();
       ctx.moveTo(r0.x-7, r0.y); ctx.lineTo(r0.x+7, r0.y);
@@ -4323,10 +4323,10 @@ function drawPreview() {
     ui.arcPoints.forEach(p => {
       const sp = w2s(p.x, p.y);
       ctx.beginPath(); ctx.arc(sp.x, sp.y, 4, 0, Math.PI*2);
-      ctx.fillStyle = '#a78bfa'; ctx.fill();
+      ctx.fillStyle = '#22d3ee'; ctx.fill();
     });
     ctx.setLineDash([4,4]);
-    ctx.strokeStyle = 'rgba(74,158,255,0.55)';
+    ctx.strokeStyle = 'rgba(34,211,238,0.55)';
     ctx.lineWidth   = 1.5;
     if (ui.arcPoints.length === 2) {
       const probe = { type:'arc', points:[ui.arcPoints[0], ui.arcPoints[1], pt] };
@@ -4367,12 +4367,12 @@ function drawPreview() {
     const a = w2s(ui.rectStart.x, ui.rectStart.y);
     const b = w2s(end.x, end.y);
     ctx.setLineDash([4,4]);
-    ctx.strokeStyle = 'rgba(74,158,255,0.45)';
+    ctx.strokeStyle = 'rgba(34,211,238,0.45)';
     ctx.lineWidth   = 1.5;
     ctx.strokeRect(Math.min(a.x,b.x), Math.min(a.y,b.y), Math.abs(b.x-a.x), Math.abs(b.y-a.y));
     ctx.setLineDash([]);
     ctx.font = '10px JetBrains Mono, monospace';
-    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.fillStyle = 'rgba(245,196,0,0.75)';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'bottom';
     ctx.fillText(`${Math.abs(end.x-ui.rectStart.x).toFixed(2)} × ${Math.abs(end.y-ui.rectStart.y).toFixed(2)} cm`,
@@ -4380,14 +4380,14 @@ function drawPreview() {
   }
 
   if (ui.tool === 'mirror' && ui.mirrorPts.length === 1) {
-    drawDashedLine(ui.mirrorPts[0], pt, 'rgba(232,0,61,0.6)');
+    drawDashedLine(ui.mirrorPts[0], pt, 'rgba(227,0,15,0.6)');
   }
 }
 
 function drawCircleCompass(sx, sy) {
   const R = 24;
   ctx.save();
-  ctx.strokeStyle = 'rgba(255,224,102,0.22)';
+  ctx.strokeStyle = 'rgba(245,196,0,0.22)';
   ctx.lineWidth   = 1;
   ctx.setLineDash([3,3]);
   ctx.beginPath(); ctx.arc(sx, sy, R, 0, Math.PI*2); ctx.stroke();
@@ -4404,13 +4404,13 @@ function drawCircleCompass(sx, sy) {
     const y = sy + s.dy * (R + 11);
     ctx.beginPath();
     ctx.arc(x, y, active ? 9 : 7, 0, Math.PI*2);
-    ctx.fillStyle   = active ? 'rgba(255,224,102,0.95)' : 'rgba(10,10,12,0.8)';
+    ctx.fillStyle   = active ? 'rgba(245,196,0,0.95)' : 'rgba(10,10,12,0.8)';
     ctx.fill();
-    ctx.strokeStyle = active ? '#ffe066' : 'rgba(255,224,102,0.5)';
+    ctx.strokeStyle = active ? '#f5c400' : 'rgba(245,196,0,0.5)';
     ctx.lineWidth   = active ? 1.8 : 1;
     ctx.stroke();
     ctx.font         = '700 9px "JetBrains Mono", ui-monospace, monospace';
-    ctx.fillStyle    = active ? '#0a0a0c' : 'rgba(255,224,102,0.8)';
+    ctx.fillStyle    = active ? '#08080f' : 'rgba(245,196,0,0.8)';
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(s.letter, x, y + 0.5);
@@ -4440,14 +4440,14 @@ function drawCircleInProgress(pt) {
 
   ctx.save();
   ctx.setLineDash([4,4]);
-  ctx.strokeStyle = 'rgba(74,158,255,0.6)';
+  ctx.strokeStyle = 'rgba(34,211,238,0.6)';
   ctx.lineWidth   = 1.5;
   ctx.beginPath(); ctx.arc(sc.x, sc.y, cm2px(r), 0, Math.PI*2); ctx.stroke();
 
   if (ui.circleMode === 'side' && far) {
     const sf = w2s(far.x, far.y);
     // diâmetro e centro
-    ctx.strokeStyle = 'rgba(255,224,102,0.8)';
+    ctx.strokeStyle = 'rgba(245,196,0,0.8)';
     ctx.beginPath(); ctx.moveTo(ss.x, ss.y); ctx.lineTo(sf.x, sf.y); ctx.stroke();
     ctx.setLineDash([]);
     ctx.lineWidth = 1;
@@ -4456,7 +4456,7 @@ function drawCircleInProgress(pt) {
     ctx.moveTo(sc.x, sc.y-5); ctx.lineTo(sc.x, sc.y+5);
     ctx.stroke();
     // início (verde) e lado oposto (amarelo)
-    for (const [sp, color] of [[ss, '#00ff87'], [sf, '#ffe066']]) {
+    for (const [sp, color] of [[ss, '#22c55e'], [sf, '#f5c400']]) {
       ctx.beginPath(); ctx.arc(sp.x, sp.y, 4, 0, Math.PI*2);
       ctx.fillStyle = color; ctx.fill();
     }
@@ -4472,7 +4472,7 @@ function drawCircleInProgress(pt) {
     ctx.beginPath(); ctx.moveTo(sc.x, sc.y); ctx.lineTo(sp.x, sp.y); ctx.stroke();
     ctx.setLineDash([]);
     ctx.font         = '10px "JetBrains Mono", ui-monospace, monospace';
-    ctx.fillStyle    = 'rgba(255,255,255,0.55)';
+    ctx.fillStyle    = 'rgba(245,196,0,0.75)';
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'bottom';
     ctx.fillText(`R ${r.toFixed(2)}cm`, (sc.x+sp.x)/2, (sc.y+sp.y)/2 - 6);
@@ -4497,7 +4497,7 @@ function drawMeasureLabel(a, b) {
   const ang  = ((Math.atan2(b.y-a.y, b.x-a.x) * 180/Math.PI) + 360) % 360;
   const sp0 = w2s(a.x, a.y), sp1 = w2s(b.x, b.y);
   ctx.font = '10px JetBrains Mono, monospace';
-  ctx.fillStyle = 'rgba(255,255,255,0.55)';
+  ctx.fillStyle = 'rgba(245,196,0,0.75)';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'bottom';
   ctx.fillText(`${dist.toFixed(2)}cm · ${ang.toFixed(1)}°`, (sp0.x+sp1.x)/2, (sp0.y+sp1.y)/2 - 6);
@@ -4508,14 +4508,14 @@ function drawMagneticIndicator() {
   const sp = w2s(ui.snapTarget.x, ui.snapTarget.y);
   ctx.beginPath();
   ctx.arc(sp.x, sp.y, 8, 0, Math.PI*2);
-  ctx.strokeStyle = '#ffe066';
+  ctx.strokeStyle = '#f5c400';
   ctx.lineWidth   = 1.5;
-  ctx.shadowColor = '#ffe066';
+  ctx.shadowColor = '#f5c400';
   ctx.shadowBlur  = 8;
   ctx.stroke();
   ctx.shadowBlur  = 0;
   // cruz
-  ctx.strokeStyle = '#ffe066';
+  ctx.strokeStyle = '#f5c400';
   ctx.lineWidth   = 1;
   ctx.beginPath();
   ctx.moveTo(sp.x-5,sp.y); ctx.lineTo(sp.x+5,sp.y);
