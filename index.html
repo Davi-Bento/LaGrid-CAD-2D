@@ -112,9 +112,11 @@
         <button class="menu-btn">Vista</button>
         <div class="menu-dropdown">
           <button data-action="fit-view">Encaixar Vista <span class="kbd">F</span></button>
-          <button data-action="toggle-grid">Grade <span class="kbd">G</span></button>
+          <button data-action="toggle-grid">Grade <span class="kbd">F1</span></button>
           <button data-action="clear-grid">Limpar Grade</button>
-          <button data-action="toggle-snap">Snap <span class="kbd">S</span></button>
+          <button data-action="toggle-snap">Snap <span class="kbd">F2</span></button>
+          <button data-action="toggle-angle">Snap Angular <span class="kbd">F3</span></button>
+          <button data-action="toggle-dist">Snap de Distância <span class="kbd">F4</span></button>
           <button data-action="toggle-crit">Alertas Raio Crítico</button>
         </div>
       </div>
@@ -620,11 +622,10 @@
       <span id="status-sel"></span>
       <span id="status-coord" class="status-coord">X: 0.00 cm  Y: 0.00 cm</span>
       <div id="status-right">
-        <button id="btn-toggle-grid" class="status-toggle active" title="G">GRADE</button>
-        <button id="btn-toggle-snap" class="status-toggle active" title="S">SNAP</button>
-        <button id="btn-toggle-angle" class="status-toggle" title="Snap angular (passo configurável)">ANG</button>
-        <button id="btn-toggle-dist" class="status-toggle" title="Snap de distância (passo configurável · F9)">DIST</button>
-        <button id="btn-toggle-ortho" class="status-toggle" title="Ortho Lock (F8)">ORTHO</button>
+        <button id="btn-toggle-grid" class="status-toggle active" title="Grade (F1)">GRADE</button>
+        <button id="btn-toggle-snap" class="status-toggle active" title="Snap (F2)">SNAP</button>
+        <button id="btn-toggle-angle" class="status-toggle" title="Snap angular (F3 · passo configurável)">ANG</button>
+        <button id="btn-toggle-dist" class="status-toggle" title="Snap de distância (F4 · passo configurável)">DIST</button>
       </div>
     </div>
   </main>
@@ -708,7 +709,7 @@
       <div class="panel-title">Precisão</div>
       <div class="prop-row">
         <label class="prop-label">Passo angular (°)</label>
-        <input type="number" id="angle-step-input" class="prop-input" value="15" step="1" min="1" max="180" />
+        <input type="number" id="angle-step-input" class="prop-input" value="90" step="1" min="1" max="180" />
       </div>
       <div class="prop-row">
         <label class="prop-label">Passo de distância (cm)</label>
@@ -719,7 +720,7 @@
         <label for="circle-quads-toggle" class="prop-label">Pontos N/L/S/O nos círculos</label>
       </div>
       <div class="hud-hint" style="margin-top:4px;font-size:10px">Ctrl+Tab no círculo = centro / borda · Ctrl+clique em N/L/S/O inicia ali</div>
-      <div class="hud-hint" style="margin-top:4px;font-size:10px">DIST (F9) = passos de distância em cm · Shift = ortho 90°</div>
+      <div class="hud-hint" style="margin-top:4px;font-size:10px">F4 = passos de distância em cm · Shift trava 90°</div>
     </div>
 
     <!-- Info -->

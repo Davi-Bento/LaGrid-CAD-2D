@@ -10,7 +10,8 @@ const SNAP_MAG_PX   = 14;       // raio magnético em pixels de tela
 const CRIT_ANGLE    = 90;       // alerta raio crítico (graus)
 const MIN_COTA_CM   = 1.5;      // mínimo para desenhar cota automática
 const DEFAULT_LINE_W = 1.9;     // cm — largura padrão de faixa
-const ANGLE_STEP_DEFAULT = 15;  // graus — snap angular configurável
+const ANGLE_STEP_DEFAULT = 90;  // graus — snap angular configurável
+const SPIRAL_ANGLE_DEFAULT = 15; // graus — passo angular padrão da espiral
 const DIST_STEP_DEFAULT  = 1;   // cm — snap de distância configurável
 const DEFAULT_WORKSPACE_W = 285; // cm
 const DEFAULT_WORKSPACE_H = 180; // cm
@@ -36,7 +37,6 @@ const state = {
   distSnap:      false,               // snap de distância ligado/desligado
   distStep:      DIST_STEP_DEFAULT,   // passo do snap de distância (cm)
   dijkstraMode:  'shortest_path',    // 'shortest_path' | 'perimeter_loop'
-  orthoLock:     false,              // ortho lock estilo AutoCAD (F8)
   showVertexCoords: true,            // mostrar coordenadas dos vértices no editor
   showCircleQuads:  true,            // mostrar pontos N/L/S/O dos círculos
 };
@@ -58,7 +58,7 @@ const ui = {
   panStart:     { x: 0, y: 0 },
   camStart:     { x: 0, y: 0 },
   snapTarget:   null,   // ponto magnético atual {x,y}
-  shiftKey:     false,  // ortho (Shift) durante o desenho
+  shiftKey:     false,  // trava de 90° (Shift) durante o desenho
   dragVertex:   null,   // {segId, idx} — vértice sendo arrastado
   mirrorPts:    [],     // eixo do espelho em construção
   offsetTargetId: null, // objeto escolhido para offset
@@ -386,7 +386,7 @@ function screenDistToSeg(seg, sx, sy) {
   return Infinity;
 }
 
-// Aplica ortho (Shift) ou snap angular ao ponto em relação a uma origem
+// Aplica a trava de 90° (Shift) ou o snap angular ao ponto em relação a uma origem
 function pointFromConstraint(origin, pt) {
   if (!origin) return pt;
   const dx = pt.x - origin.x, dy = pt.y - origin.y;
@@ -844,7 +844,7 @@ function readSpiralParams() {
     anchor:      anchorEl ? anchorEl.value : 'center',
     centerStart: !!(centerEl && centerEl.checked),
     r1:          spiralInput('spiral-r1', 2.5),
-    stepAngle:   spiralInput('spiral-angle', ANGLE_STEP_DEFAULT),
+    stepAngle:   spiralInput('spiral-angle', SPIRAL_ANGLE_DEFAULT),
     factor:      spiralInput('spiral-factor', 1.017),
     count,
     subdiv,
@@ -5278,6 +5278,14 @@ function onKeyDown(e) {
     return;
   }
 
+  // Toggles de precisão (F1–F4) funcionam mesmo com um campo focado.
+  switch (e.key) {
+    case 'F1': e.preventDefault(); toggleGrid();      return;
+    case 'F2': e.preventDefault(); toggleSnap();      return;
+    case 'F3': e.preventDefault(); toggleAngleSnap(); return;
+    case 'F4': e.preventDefault(); toggleDistSnap();  return;
+  }
+
   if (inInput) return;
 
   // Enter finaliza construções no canvas
@@ -5325,19 +5333,7 @@ function onKeyDown(e) {
     case '2': if (ctrl) setTool('end-node');   break;
     case 'Delete': case 'Backspace': deleteSelection(); break;
     case 'f': case 'F': if (!ctrl) { e.preventDefault(); fitView(); } break;
-    case 'g': case 'G':
-      state.showGrid = !state.showGrid;
-      document.getElementById('btn-toggle-grid').classList.toggle('active', state.showGrid);
-      render();
-      break;
-    case 's': case 'S':
-      if (!ctrl) {
-        state.snapEnabled = !state.snapEnabled;
-        document.getElementById('btn-toggle-snap').classList.toggle('active', state.snapEnabled);
-      }
-      break;
     case 'F5': e.preventDefault(); runTrackAnalysis(); break;
-    case 'F9': e.preventDefault(); toggleDistSnap(); break;
     case 'Home':
       e.preventDefault();
       fitWorkspace();
@@ -5864,7 +5860,6 @@ function saveJSON() {
     distSnap:  state.distSnap,
     distStep:  state.distStep,
     dijkstraMode: state.dijkstraMode,
-    orthoLock:    state.orthoLock,
     showVertexCoords: state.showVertexCoords,
     showCircleQuads:  state.showCircleQuads,
     spiral: {
@@ -5944,7 +5939,6 @@ function loadJSON(file) {
         if (dzEl) dzEl.value = d.deadzone;
       }
       if (typeof d.dijkstraMode === 'string') state.dijkstraMode = d.dijkstraMode;
-      if (typeof d.orthoLock === 'boolean') state.orthoLock = d.orthoLock;
       if (typeof d.showVertexCoords === 'boolean') {
         state.showVertexCoords = d.showVertexCoords;
         const vcEl = document.getElementById('exp-vertex-coords');
@@ -5986,8 +5980,6 @@ function loadJSON(file) {
       }
       const modeEl = document.getElementById('dijkstra-mode-select');
       if (modeEl) modeEl.value = state.dijkstraMode;
-      const orthoBtn = document.getElementById('btn-toggle-ortho');
-      if (orthoBtn) orthoBtn.classList.toggle('active', state.orthoLock);
       const angBtn = document.getElementById('btn-toggle-angle');
       if (angBtn) angBtn.classList.toggle('active', state.angleSnap);
       const distBtn = document.getElementById('btn-toggle-dist');
@@ -6321,19 +6313,15 @@ document.querySelectorAll('[data-action]').forEach(btn => {
         document.getElementById('dijk-result').classList.add('hidden');
         render(); toast('Destaque limpo'); break;
       case 'fit-view':    fitView(); break;
-      case 'toggle-grid':
-        state.showGrid = !state.showGrid;
-        document.getElementById('btn-toggle-grid').classList.toggle('active', state.showGrid);
-        render(); break;
+      case 'toggle-grid':  toggleGrid(); break;
       case 'clear-grid':
         // "limpar grade" = ocultar temporariamente (toggle)
         state.showGrid = false;
         document.getElementById('btn-toggle-grid').classList.remove('active');
-        render(); toast('Grade ocultada · G para reexibir'); break;
-      case 'toggle-snap':
-        state.snapEnabled = !state.snapEnabled;
-        document.getElementById('btn-toggle-snap').classList.toggle('active', state.snapEnabled);
-        break;
+        render(); toast('Grade ocultada · F1 para reexibir'); break;
+      case 'toggle-snap':  toggleSnap(); break;
+      case 'toggle-angle': toggleAngleSnap(); break;
+      case 'toggle-dist':  toggleDistSnap(); break;
       case 'toggle-crit':
         state.showCritical = !state.showCritical;
         render(); break;
@@ -6436,15 +6424,6 @@ document.getElementById('btn-coord-none').addEventListener('click', () => {
 document.getElementById('btn-zoom-reset').addEventListener('click', () => {
   fitWorkspace();
 });
-document.getElementById('btn-toggle-grid').addEventListener('click', () => {
-  state.showGrid = !state.showGrid;
-  document.getElementById('btn-toggle-grid').classList.toggle('active', state.showGrid);
-  render();
-});
-document.getElementById('btn-toggle-snap').addEventListener('click', () => {
-  state.snapEnabled = !state.snapEnabled;
-  document.getElementById('btn-toggle-snap').classList.toggle('active', state.snapEnabled);
-});
 
 // HUD polar botões
 document.getElementById('polar-confirm-btn').addEventListener('click', commitPolarHud);
@@ -6509,25 +6488,43 @@ document.getElementById('array-cancel-btn').addEventListener('click', () => {
   setTool('select');
 });
 
-// Snap angular configurável
-document.getElementById('btn-toggle-angle').addEventListener('click', () => {
-  state.angleSnap = !state.angleSnap;
-  document.getElementById('btn-toggle-angle').classList.toggle('active', state.angleSnap);
+// ── TOGGLES DO STATUS BAR (F1–F4) ─────────────────────────
+function toggleGrid() {
+  state.showGrid = !state.showGrid;
+  const btn = document.getElementById('btn-toggle-grid');
+  if (btn) btn.classList.toggle('active', state.showGrid);
   render();
-});
-document.getElementById('angle-step-input').addEventListener('change', () => {
-  const v = parseFloat(document.getElementById('angle-step-input').value);
-  if (!isNaN(v) && v > 0) state.angleStep = v;
-});
+}
 
-// Snap de distância configurável (F9)
+function toggleSnap() {
+  state.snapEnabled = !state.snapEnabled;
+  const btn = document.getElementById('btn-toggle-snap');
+  if (btn) btn.classList.toggle('active', state.snapEnabled);
+}
+
+function toggleAngleSnap() {
+  state.angleSnap = !state.angleSnap;
+  const btn = document.getElementById('btn-toggle-angle');
+  if (btn) btn.classList.toggle('active', state.angleSnap);
+  render();
+}
+
+// Snap de distância configurável (F4)
 function toggleDistSnap() {
   state.distSnap = !state.distSnap;
   const btn = document.getElementById('btn-toggle-dist');
   if (btn) btn.classList.toggle('active', state.distSnap);
   render();
 }
+
+document.getElementById('btn-toggle-grid').addEventListener('click', toggleGrid);
+document.getElementById('btn-toggle-snap').addEventListener('click', toggleSnap);
+document.getElementById('btn-toggle-angle').addEventListener('click', toggleAngleSnap);
 document.getElementById('btn-toggle-dist').addEventListener('click', toggleDistSnap);
+document.getElementById('angle-step-input').addEventListener('change', () => {
+  const v = parseFloat(document.getElementById('angle-step-input').value);
+  if (!isNaN(v) && v > 0) state.angleStep = v;
+});
 document.getElementById('dist-step-input').addEventListener('change', () => {
   const v = parseFloat(document.getElementById('dist-step-input').value);
   if (!isNaN(v) && v > 0) state.distStep = v;
