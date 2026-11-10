@@ -2719,24 +2719,97 @@ function startPasteMode() {
   if (ui.dragMove) finishMoveDrag();
   // Fantasma já nasce sob o cursor (estilo PASTECLIP do AutoCAD)
   const cursor = ui.snapTarget ? { ...ui.snapTarget } : { ...ui.mouseWorld };
+  const segs = JSON.parse(JSON.stringify(ui.clipboard.segs));
+  const anchors = pasteAnchorPoints(segs);
   ui.pasteMode = {
-    segs: JSON.parse(JSON.stringify(ui.clipboard.segs)),
-    anchor: { ...ui.clipboard.anchor },
-    offset: {
-      x: cursor.x - ui.clipboard.anchor.x,
-      y: cursor.y - ui.clipboard.anchor.y,
-    },
+    segs,
+    anchors,
+    anchorIndex: 0,
+    anchor: { ...anchors[0] },   // âncora local (centro por padrão)
+    position: { x: cursor.x, y: cursor.y }, // posição da âncora no mundo
+    scale: 1,
+    rotation: 0,
   };
-  setStatus('Clique para colar · Enter confirma no cursor · Esc cancela');
+  setStatus(`Clique para colar · ${PASTE_HINT}`);
   render();
   return true;
+}
+
+const PASTE_HINT = '↑↓ escala · R gira 90° · Tab âncora · Enter confirma · Esc cancela';
+
+// Âncoras possíveis: centro da caixa + pontas inicial/final.
+// O Tab alterna entre elas sem perder a posição do cursor.
+function pasteAnchorPoints(segs) {
+  const center = segmentsAnchor(segs);
+  const anchors = [{ x: center.x, y: center.y, kind: 'centro' }];
+  const push = (p, kind) => {
+    if (!p) return;
+    if (anchors.some(a => Math.hypot(a.x - p.x, a.y - p.y) < 1e-6)) return;
+    anchors.push({ x: p.x, y: p.y, kind });
+  };
+  const first = segs[0];
+  const last = segs[segs.length - 1];
+  if (first) {
+    if (first.type === 'circle') {
+      const c = first.points[0], r = first.radius;
+      push({ x: c.x + r, y: c.y }, 'direita');
+      push({ x: c.x - r, y: c.y }, 'esquerda');
+    } else {
+      push(first.points[0], 'início');
+    }
+  }
+  if (last) {
+    if (last.type === 'circle') {
+      const c = last.points[0], r = last.radius;
+      push({ x: c.x, y: c.y - r }, 'topo');
+      push({ x: c.x, y: c.y + r }, 'baixo');
+    } else {
+      push(last.points[last.points.length - 1], 'fim');
+    }
+  }
+  return anchors;
+}
+
+function transformPastePoint(p, pm) {
+  const dx = (p.x - pm.anchor.x) * pm.scale;
+  const dy = (p.y - pm.anchor.y) * pm.scale;
+  const cos = Math.cos(pm.rotation);
+  const sin = Math.sin(pm.rotation);
+  return {
+    x: pm.position.x + dx * cos - dy * sin,
+    y: pm.position.y + dx * sin + dy * cos,
+  };
+}
+
+function transformPasteSeg(seg, pm) {
+  const out = { ...seg, points: seg.points.map(p => transformPastePoint(p, pm)) };
+  if (seg.type === 'circle') out.radius = seg.radius * pm.scale;
+  if (seg.originalCircle) {
+    out.originalCircle = { ...seg.originalCircle };
+    if (seg.originalCircle.c) {
+      out.originalCircle.c = transformPastePoint(seg.originalCircle.c, pm);
+    }
+    if (Number.isFinite(seg.originalCircle.r)) {
+      out.originalCircle.r = seg.originalCircle.r * pm.scale;
+    }
+  }
+  return out;
+}
+
+function cyclePasteAnchor() {
+  const pm = ui.pasteMode;
+  if (!pm) return;
+  pm.anchorIndex = (pm.anchorIndex + 1) % pm.anchors.length;
+  pm.anchor = { ...pm.anchors[pm.anchorIndex] };
+  setStatus(`Colagem: âncora ${pm.anchor.kind} · ${PASTE_HINT}`);
+  render();
 }
 
 function updatePasteOffset(wp) {
   const pm = ui.pasteMode;
   if (!pm) return;
   const target = ui.snapTarget ? { ...ui.snapTarget } : { x: wp.x, y: wp.y };
-  pm.offset = { x: target.x - pm.anchor.x, y: target.y - pm.anchor.y };
+  pm.position = { x: target.x, y: target.y };
 }
 
 function commitPaste() {
@@ -2746,10 +2819,9 @@ function commitPaste() {
   saveUndo();
   const created = [];
   for (const src of pm.segs) {
-    const copy = JSON.parse(JSON.stringify(src));
+    const copy = transformPasteSeg(src, pm);
     copy.id = state.nextId++;
     copy.selected = false;
-    translateSeg(copy, pm.offset.x, pm.offset.y);
     state.segments.push(copy);
     created.push(copy);
   }
@@ -3465,7 +3537,7 @@ function insertLibraryCurve(id) {
   ui.clipboard = { segs, anchor: { ...anchor } };
   if (!startPasteMode()) return;
   ui.pasteLabel = item.name;
-  setStatus(`${item.name}: clique no desenho para inserir · Enter confirma · Esc cancela`);
+  setStatus(`${item.name}: clique no desenho para inserir · ${PASTE_HINT}`);
 }
 
 // ── MOVER COM PRECISÃO ────────────────────────────────────
@@ -4135,7 +4207,7 @@ function drawPreview() {
 
   // Prévia de colagem (fantasma seguindo o cursor)
   if (ui.pasteMode) {
-    const off = ui.pasteMode.offset;
+    const pm = ui.pasteMode;
     ctx.save();
     ctx.globalAlpha  = 0.6;
     ctx.strokeStyle  = '#ffe066';
@@ -4143,17 +4215,28 @@ function drawPreview() {
     ctx.lineCap      = 'round';
     ctx.lineJoin     = 'round';
     ctx.setLineDash([7 * cam.scale, 5 * cam.scale]);
-    for (const src of ui.pasteMode.segs) {
-      strokeSegPath(cloneTranslated(src, off.x, off.y));
+    for (const src of pm.segs) {
+      strokeSegPath(transformPasteSeg(src, pm));
     }
     ctx.setLineDash([]);
     ctx.restore();
     // Ponto de encaixe (âncora da colagem)
-    const ap = w2s(ui.pasteMode.anchor.x + off.x, ui.pasteMode.anchor.y + off.y);
-    ctx.beginPath();
-    ctx.arc(ap.x, ap.y, 3, 0, Math.PI*2);
+    const ap = w2s(pm.position.x, pm.position.y);
+    ctx.strokeStyle = '#ffe066';
     ctx.fillStyle = '#ffe066';
-    ctx.fill();
+    ctx.lineWidth = 1.5;
+    if (pm.anchor.kind === 'centro') {
+      ctx.beginPath();
+      ctx.arc(ap.x, ap.y, 3, 0, Math.PI*2);
+      ctx.fill();
+    } else {
+      // Ponta selecionada: quadrado vazado para diferenciar do centro.
+      ctx.strokeRect(ap.x - 4, ap.y - 4, 8, 8);
+      ctx.beginPath();
+      ctx.moveTo(ap.x - 6, ap.y); ctx.lineTo(ap.x + 6, ap.y);
+      ctx.moveTo(ap.x, ap.y - 6); ctx.lineTo(ap.x, ap.y + 6);
+      ctx.stroke();
+    }
   }
 
   if (ui.tool === 'line' && ui.lineStart) {
@@ -4840,6 +4923,32 @@ function onKeyDown(e) {
     e.preventDefault();
     startPasteMode();
     return;
+  }
+
+  // Modo colagem: setas mudam a escala, R gira 90° e Tab troca a âncora.
+  // Fica antes dos atalhos de ferramenta para o R não abrir o fillet.
+  if (ui.pasteMode && !ctrl) {
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      e.preventDefault();
+      const step = e.key === 'ArrowUp' ? 1.1 : 1 / 1.1;
+      ui.pasteMode.scale = Math.max(0.05, Math.min(20, ui.pasteMode.scale * step));
+      setStatus(`Colagem: escala ${ui.pasteMode.scale.toFixed(2)}× · ${PASTE_HINT}`);
+      render();
+      return;
+    }
+    if (e.key === 'r' || e.key === 'R') {
+      e.preventDefault();
+      ui.pasteMode.rotation = (ui.pasteMode.rotation + Math.PI / 2) % (Math.PI * 2);
+      const deg = Math.round(ui.pasteMode.rotation * 180 / Math.PI);
+      setStatus(`Colagem: giro ${deg}° · ${PASTE_HINT}`);
+      render();
+      return;
+    }
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      cyclePasteAnchor();
+      return;
+    }
   }
 
   if (inInput) return;
