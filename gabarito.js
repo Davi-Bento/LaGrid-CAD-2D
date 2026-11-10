@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════
-   LINETRACK CAD — GABARITO DE MONTAGEM
+   LAGRID CAD 2D — GABARITO DE MONTAGEM
    Desenho de obra: pista, guias, centros e raios.
    Tudo client-side. PDF direto via pdf-lib (vendor local).
 ═══════════════════════════════════════════════════════ */
@@ -505,7 +505,7 @@
     const sw = vp.trackW;
 
     out.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${n(vp.pageW)} ${n(vp.pageH)}"${mode === 'preview' ? ' width="100%"' : ` width="${n(vp.pageW)}mm" height="${n(vp.pageH)}mm"`} preserveAspectRatio="xMidYMid meet">`);
-    out.push(`<title>Gabarito de Montagem — LineTrack CAD</title>`);
+    out.push(`<title>Gabarito de Montagem — LaGrid CAD 2D</title>`);
     out.push(`<desc>${esc(summaryText(data))}.</desc>`);
     out.push(`<rect x="0" y="0" width="${n(vp.pageW)}" height="${n(vp.pageH)}" fill="#ffffff"/>`);
 
@@ -551,11 +551,11 @@
       out.push(`<text x="${n(vp.ox > 4 ? vp.ox : 9)}" y="6.2" font-family="${vp.font}" font-size="4.2" font-weight="700" fill="${COLORS.label}">GABARITO DE MONTAGEM</text>`);
       out.push(`<text x="${n(vp.ox > 4 ? vp.ox : 9)}" y="10.4" font-family="${vp.font}" font-size="2.35" fill="${COLORS.labelSub}">${esc(summaryText(data))}</text>`);
       out.push(`<text x="${n(vp.pageW - 9)}" y="6.2" text-anchor="end" font-family="${vp.font}" font-size="2.2" fill="${COLORS.footer}">A4 paisagem · ${DATE_BR}</text>`);
-      out.push(`<text x="${n(vp.pageW / 2)}" y="${n(vp.pageH - 3)}" text-anchor="middle" font-family="${vp.font}" font-size="1.9" fill="${COLORS.footer}">LineTrack CAD · medidas em cm · origem: ${esc(originLabel(data))}</text>`);
+      out.push(`<text x="${n(vp.pageW / 2)}" y="${n(vp.pageH - 3)}" text-anchor="middle" font-family="${vp.font}" font-size="1.9" fill="${COLORS.footer}">LaGrid CAD 2D · medidas em cm · origem: ${esc(originLabel(data))}</text>`);
     } else if (mode === 'real') {
       out.push(`<text x="18" y="34" font-family="${vp.font}" font-size="22" font-weight="700" fill="${COLORS.label}">GABARITO DE MONTAGEM — 1:1</text>`);
       out.push(`<text x="18" y="64" font-family="${vp.font}" font-size="12" fill="${COLORS.labelSub}">${esc(summaryText(data))}</text>`);
-      out.push(`<text x="18" y="${n(vp.pageH - 14)}" font-family="${vp.font}" font-size="7" fill="${COLORS.footer}">LineTrack CAD · 1 cm no papel = 1 cm na pista · ${DATE_BR}</text>`);
+      out.push(`<text x="18" y="${n(vp.pageH - 14)}" font-family="${vp.font}" font-size="7" fill="${COLORS.footer}">LaGrid CAD 2D · 1 cm no papel = 1 cm na pista · ${DATE_BR}</text>`);
     }
 
     out.push('</svg>');
@@ -803,13 +803,13 @@
     drawPDFLabels(ctx, page, data, vp, map);
 
     if (!vp.real) {
-      const footer = `LineTrack CAD · medidas em cm · origem: ${originLabel(data)}`;
+      const footer = `LaGrid CAD 2D · medidas em cm · origem: ${originLabel(data)}`;
       page.drawText(footer, {
         x: vp.pageW / 2 - font.widthOfTextAtSize(footer, 6.4) / 2,
         y: 10, size: 6.4, font, color: col(COLORS.footer),
       });
     } else {
-      page.drawText(`LineTrack CAD · 1 cm no papel = 1 cm na pista · ${DATE_BR}`, {
+      page.drawText(`LaGrid CAD 2D · 1 cm no papel = 1 cm na pista · ${DATE_BR}`, {
         x: vp.side, y: 0.9 * PT_PER_CM,
         size: 12, font, color: col(COLORS.footer),
       });
@@ -1071,7 +1071,7 @@
       const fs = big ? 22 : 6.8;
       const margin = big ? 1.8 * PT_PER_CM : 26;
       const y = big ? 1.2 * PT_PER_CM : 12;
-      const left = 'LineTrack CAD · Gabarito de montagem';
+      const left = 'LaGrid CAD 2D · Gabarito de montagem';
       page.drawText(left, { x: margin, y, size: fs, font, color: col(COLORS.footer) });
       const right = `Página ${idx + 1} de ${total}`;
       page.drawText(right, {

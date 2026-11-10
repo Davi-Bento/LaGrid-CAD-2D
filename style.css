@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════
-   LINETRACK CAD — STYLESHEET v2
+   LAGRID CAD 2D — STYLESHEET v2
    Tema: F1 Moderna · Dark Industrial · Precision UI
 ═══════════════════════════════════════════════════════ */
 
@@ -1335,7 +1335,6 @@ select.hud-input {
   font-style: italic;
   font-size: 15px;
   letter-spacing: .03em;
-  text-transform: uppercase;
   color: var(--text-primary);
 }
 

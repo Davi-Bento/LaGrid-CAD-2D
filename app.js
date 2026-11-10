@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════
-   LINETRACK CAD — app.js v2
+   LAGRID CAD 2D — app.js v2
    Unidade base: CM. 1 cm = PX_PER_CM px na escala 1:1
 ═══════════════════════════════════════════════════════ */
 'use strict';
@@ -3338,7 +3338,7 @@ function curveCode(item) {
   let segs = [];
   try { segs = item.build(); } catch (_) { segs = []; }
   return [
-    '// Curva salva no LineTrack — cole em curvas/minhas-curvas.js',
+    '// Curva salva no LaGrid — cole em curvas/minhas-curvas.js',
     'TRACK_LIBRARY.push({',
     `  id: ${JSON.stringify(String(item.id))},`,
     `  name: ${JSON.stringify(String(item.name))},`,
@@ -3355,7 +3355,7 @@ function curveCode(item) {
 function customCurvesCode() {
   const custom = libraryItems().filter(i => i.custom);
   if (!custom.length) {
-    return '// Nenhuma curva própria salva ainda.\n// Use "Salvar seleção" na Biblioteca de Curvas do LineTrack.\n';
+    return '// Nenhuma curva própria salva ainda.\n// Use "Salvar seleção" na Biblioteca de Curvas do LaGrid.\n';
   }
   return custom.map(curveCode).join('\n');
 }
@@ -5875,7 +5875,7 @@ function saveJSON() {
   }, null, 2);
   const a = document.createElement('a');
   a.href     = URL.createObjectURL(new Blob([data],{type:'application/json'}));
-  a.download = 'linetrack-pista.json';
+  a.download = 'lagrid-pista.json';
   a.click();
   toast('JSON salvo', 'success');
 }
@@ -6263,7 +6263,7 @@ function exportPDF() {
   // Rodapé
   const footerY = (svgH - margin*0.4) * CM2SVG;
   const footerColor = invert?'rgba(255,255,255,0.3)':'rgba(0,0,0,0.25)';
-  paths += `<text x="${(margin*CM2SVG).toFixed(0)}" y="${footerY.toFixed(0)}" font-family="Rajdhani,sans-serif" font-size="9" fill="${footerColor}">LineTrack CAD · Formato ${format} · ${new Date().toLocaleDateString('pt-BR')}</text>`;
+  paths += `<text x="${(margin*CM2SVG).toFixed(0)}" y="${footerY.toFixed(0)}" font-family="Rajdhani,sans-serif" font-size="9" fill="${footerColor}">LaGrid CAD 2D · Formato ${format} · ${new Date().toLocaleDateString('pt-BR')}</text>`;
 
   const svgContent = `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg"
@@ -6282,7 +6282,7 @@ function exportPDF() {
 <html>
 <head>
 <meta charset="UTF-8">
-<title>LineTrack CAD — Exportar PDF</title>
+<title>LaGrid CAD 2D — Exportar PDF</title>
 <style>
   @page { size: ${pageW}cm ${pageH}cm; margin: 0; }
   * { margin:0; padding:0; box-sizing:border-box; }
@@ -6789,4 +6789,4 @@ updateZoomDisplay();
 updatePanelInfo();
 updateDijkstraPanel();
 setTool('select');
-toast('LineTrack CAD · L=Linha A=Arco R=Fillet 1/2=Nós F5=Comprimento', 'success');
+toast('LaGrid CAD 2D · L=Linha A=Arco R=Fillet 1/2=Nós F5=Comprimento', 'success');

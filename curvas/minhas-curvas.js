@@ -1,5 +1,5 @@
 // ── Minhas curvas ─────────────────────────────────────────
-// Curvas próprias do LineTrack. Cada bloco abaixo adiciona uma curva à
+// Curvas próprias do LaGrid CAD 2D. Cada bloco abaixo adiciona uma curva à
 // biblioteca (botão LIB). Na própria biblioteca, use "Código" e depois
 // "Baixar .js" para gerar o bloco; cole o conteúdo aqui e recarregue a
 // página para a curva ficar disponível sempre, mesmo em outro navegador.

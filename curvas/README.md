@@ -1,6 +1,6 @@
 # Minhas curvas
 
-Pasta para guardar curvas próprias do LineTrack em forma de código.
+Pasta para guardar curvas próprias do LaGrid CAD 2D em forma de código.
 
 ## Como adicionar uma curva
 
@@ -21,6 +21,6 @@ disponíveis após recarregar a página até o navegador ser limpo/resetado.
 
 ## Observações
 
-- Curvas salvas pelo site ficam no `localStorage` (`linetrack.curveLibrary.v1`).
+- Curvas salvas pelo site ficam no `localStorage` (chave legada `linetrack.curveLibrary.v1`).
 - Curvas definidas neste arquivo têm prioridade se o `id` for igual.
 - O bloco gerado usa `libPt(x, y)` com Y para cima, igual às curvas nativas.
