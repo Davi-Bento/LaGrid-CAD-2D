@@ -75,6 +75,21 @@ const ui = {
   clipboard:    null,   // { segs, anchor } — cópia em memória
 };
 
+// ── IMAGEM DE FUNDO (só na sessão; não entra no JSON nem no PDF) ──
+const BG_MAX_PX = 2400;
+const bg = {
+  image:    null,   // canvas offscreen já reduzido
+  name:     '',
+  x:        0,      // centro em coordenadas de mundo (cm)
+  y:        0,
+  widthCm:  0,
+  rotation: 0,      // graus, positivo = anti-horário
+  opacity:  0.4,
+  visible:  true,
+  adjust:   false,
+  drag:     null,   // { mode, handle, startWorld, startX, startY, startW, startRot, startAngle }
+};
+
 // ── CANVAS ───────────────────────────────────────────────
 const canvas = document.getElementById('main-canvas');
 const ctx    = canvas.getContext('2d');
@@ -523,6 +538,7 @@ function redo() {
 
 // ── SET TOOL ─────────────────────────────────────────────
 function setTool(tool) {
+  if (bg.adjust) bgSetAdjust(false, true);
   if (ui.dragMove) finishMoveDrag();
   if (ui.pasteMode) { ui.pasteMode = null; ui.pasteLabel = null; }
   if (tool === 'circle' && ui.tool !== 'circle') {
@@ -3622,6 +3638,282 @@ function angleBetweenSegs(segA, vA, segB, vB) {
   return Math.acos(dot) * 180 / Math.PI;
 }
 
+// ── IMAGEM DE FUNDO ───────────────────────────────────────
+function bgAspect() {
+  return bg.image ? bg.image.height / bg.image.width : 1;
+}
+
+function bgHeightCm() {
+  return bg.widthCm * bgAspect();
+}
+
+// Converte um deslocamento local (cm) em coordenada de mundo, já rotacionado.
+function bgLocalToWorld(lx, ly) {
+  const rad = bg.rotation * Math.PI / 180;
+  const cos = Math.cos(rad), sin = Math.sin(rad);
+  return { x: bg.x + lx*cos - ly*sin,
+           y: bg.y + lx*sin + ly*cos };
+}
+
+function bgCornersWorld() {
+  const hw = bg.widthCm / 2, hh = bgHeightCm() / 2;
+  return [bgLocalToWorld(-hw, -hh), bgLocalToWorld(hw, -hh),
+          bgLocalToWorld(hw, hh),   bgLocalToWorld(-hw, hh)];
+}
+
+function bgRotationHandleWorld() {
+  const marginCm = 28 / (PX_PER_CM * cam.scale);
+  return bgLocalToWorld(0, bgHeightCm()/2 + marginCm);
+}
+
+function bgPointInside(pt, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x, yi = poly[i].y;
+    const xj = poly[j].x, yj = poly[j].y;
+    if (((yi > pt.y) !== (yj > pt.y)) &&
+        (pt.x < (xj - xi) * (pt.y - yi) / ((yj - yi) || 1e-9) + xi)) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+function drawBackgroundImage() {
+  if (!bg.image || !bg.visible) return;
+  const c = w2s(bg.x, bg.y);
+  const w = cm2px(bg.widthCm);
+  const h = cm2px(bgHeightCm());
+  ctx.save();
+  ctx.globalAlpha = bg.opacity;
+  ctx.translate(c.x, c.y);
+  ctx.rotate(-bg.rotation * Math.PI / 180);
+  ctx.drawImage(bg.image, -w/2, -h/2, w, h);
+  ctx.restore();
+}
+
+function drawBackgroundOverlay() {
+  if (!bg.image || !bg.adjust) return;
+
+  const corners = bgCornersWorld().map(p => w2s(p.x, p.y));
+  const rotHandle = w2s(bgRotationHandleWorld().x, bgRotationHandleWorld().y);
+
+  ctx.save();
+  ctx.strokeStyle = 'rgba(34,211,238,0.9)';
+  ctx.lineWidth = 1.2;
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath();
+  corners.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
+  ctx.closePath();
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Haste da alça de rotação
+  const topMid = { x: (corners[0].x + corners[1].x)/2, y: (corners[0].y + corners[1].y)/2 };
+  ctx.beginPath();
+  ctx.moveTo(topMid.x, topMid.y);
+  ctx.lineTo(rotHandle.x, rotHandle.y);
+  ctx.stroke();
+
+  // Alças de canto
+  ctx.fillStyle = '#08080f';
+  corners.forEach(p => {
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, 5, 0, Math.PI*2);
+    ctx.fill();
+    ctx.stroke();
+  });
+
+  // Alça de rotação
+  ctx.beginPath();
+  ctx.arc(rotHandle.x, rotHandle.y, 6, 0, Math.PI*2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(rotHandle.x, rotHandle.y, 2, 0, Math.PI*2);
+  ctx.fillStyle = 'rgba(34,211,238,0.9)';
+  ctx.fill();
+
+  // Medidas no centro da imagem
+  const center = w2s(bg.x, bg.y);
+  ctx.font = '10px JetBrains Mono, monospace';
+  ctx.fillStyle = 'rgba(34,211,238,0.9)';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(
+    `${bg.widthCm.toFixed(1)} × ${bgHeightCm().toFixed(1)} cm · ${Math.round(bg.rotation)}°`,
+    center.x, center.y
+  );
+  ctx.restore();
+}
+
+function bgHitTest(sx, sy) {
+  if (!bg.image || !bg.adjust) return null;
+
+  const rot = bgRotationHandleWorld();
+  const rs = w2s(rot.x, rot.y);
+  if (Math.hypot(sx - rs.x, sy - rs.y) <= 9) return { mode: 'rotate' };
+
+  const corners = bgCornersWorld().map(p => w2s(p.x, p.y));
+  for (let i = 0; i < corners.length; i++) {
+    if (Math.hypot(sx - corners[i].x, sy - corners[i].y) <= 8) {
+      return { mode: 'resize', handle: i };
+    }
+  }
+  if (bgPointInside({ x: sx, y: sy }, corners)) return { mode: 'move' };
+  return null;
+}
+
+function bgBeginDrag(hit, wp) {
+  bg.drag = {
+    mode:       hit.mode,
+    handle:     hit.handle,
+    startWorld: { x: wp.x, y: wp.y },
+    startX:     bg.x,
+    startY:     bg.y,
+    startW:     bg.widthCm,
+    startRot:   bg.rotation,
+    startAngle: Math.atan2(wp.y - bg.y, wp.x - bg.x),
+  };
+  if (hit.mode === 'rotate') canvas.style.cursor = 'grabbing';
+}
+
+function bgUpdateDrag(wp, shiftKey) {
+  const d = bg.drag;
+  if (!d) return;
+
+  if (d.mode === 'move') {
+    bg.x = d.startX + (wp.x - d.startWorld.x);
+    bg.y = d.startY + (wp.y - d.startWorld.y);
+  } else if (d.mode === 'resize') {
+    const d0 = Math.hypot(d.startWorld.x - d.startX, d.startWorld.y - d.startY);
+    const d1 = Math.hypot(wp.x - bg.x, wp.y - bg.y);
+    if (d0 > 0.01) bg.widthCm = Math.max(1, d.startW * (d1 / d0));
+  } else if (d.mode === 'rotate') {
+    const a = Math.atan2(wp.y - bg.y, wp.x - bg.x);
+    let deg = d.startRot + (a - d.startAngle) * 180 / Math.PI;
+    if (shiftKey) deg = Math.round(deg / 15) * 15;
+    bg.rotation = ((deg % 360) + 360) % 360;
+  }
+}
+
+function bgFitToWorkspace() {
+  if (!bg.image) return;
+  const maxW = state.workspace.w * 0.9;
+  const maxH = state.workspace.h * 0.9;
+  const aspect = bgAspect();
+  let w = maxW, h = w * aspect;
+  if (h > maxH) { h = maxH; w = h / aspect; }
+  bg.widthCm = Math.max(1, w);
+  bg.x = state.workspace.w / 2;
+  bg.y = state.workspace.h / 2;
+}
+
+function bgCenter() {
+  if (!bg.image) return;
+  bg.x = state.workspace.w / 2;
+  bg.y = state.workspace.h / 2;
+}
+
+function bgSyncControls() {
+  const has = !!bg.image;
+  ['bg-visible', 'bg-opacity', 'bg-width', 'bg-rotation', 'bg-x', 'bg-y',
+   'btn-bg-adjust', 'btn-bg-fit', 'btn-bg-center', 'btn-bg-remove'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !has;
+  });
+
+  const meta = document.getElementById('bg-meta');
+  if (meta) {
+    meta.textContent = has
+      ? `${bg.name} · ${bg.image.width}×${bg.image.height} px`
+      : 'Nenhuma imagem carregada';
+    meta.classList.toggle('has-image', has);
+  }
+
+  const setVal = (id, value) => {
+    const el = document.getElementById(id);
+    if (el && document.activeElement !== el) el.value = value;
+  };
+  setVal('bg-width',     has ? bg.widthCm.toFixed(1) : 0);
+  setVal('bg-rotation',  has ? bg.rotation.toFixed(1) : 0);
+  setVal('bg-x',         has ? bg.x.toFixed(1) : 0);
+  setVal('bg-y',         has ? bg.y.toFixed(1) : 0);
+
+  const visible = document.getElementById('bg-visible');
+  if (visible) visible.checked = bg.visible;
+
+  const opacity = document.getElementById('bg-opacity');
+  if (opacity) opacity.value = Math.round(bg.opacity * 100);
+
+  const opacityVal = document.getElementById('bg-opacity-val');
+  if (opacityVal) opacityVal.textContent = `${Math.round(bg.opacity * 100)}%`;
+
+  const adjust = document.getElementById('btn-bg-adjust');
+  if (adjust) adjust.classList.toggle('active', bg.adjust);
+}
+
+// Liga/desliga o modo de ajuste. silent evita render/status (usado por setTool).
+function bgSetAdjust(on, silent) {
+  const next = !!on && !!bg.image;
+  bg.adjust = next;
+  bg.drag = null;
+  canvas.style.cursor = '';
+  bgSyncControls();
+  if (silent) return;
+  if (next) {
+    setStatus('Imagem de fundo: arraste para mover · cantos redimensionam · alça gira · Shift trava 15° · Esc sai');
+  } else {
+    setStatus('Pronto');
+  }
+  render();
+}
+
+function bgLoadImage(file) {
+  if (!file) return;
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    const scale = Math.min(1, BG_MAX_PX / Math.max(img.naturalWidth, img.naturalHeight));
+    const w = Math.max(1, Math.round(img.naturalWidth * scale));
+    const h = Math.max(1, Math.round(img.naturalHeight * scale));
+    const off = document.createElement('canvas');
+    off.width = w;
+    off.height = h;
+    off.getContext('2d').drawImage(img, 0, 0, w, h);
+    URL.revokeObjectURL(url);
+
+    bg.image    = off;
+    bg.name     = file.name || 'imagem';
+    bg.rotation = 0;
+    bg.opacity  = 0.4;
+    bg.visible  = true;
+    bg.adjust   = false;
+    bg.drag     = null;
+    bgFitToWorkspace();
+    bgSyncControls();
+    render();
+    toast('Imagem de fundo carregada', 'success');
+  };
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    toast('Não foi possível carregar a imagem', 'warn');
+  };
+  img.src = url;
+}
+
+function bgRemove() {
+  bg.image   = null;
+  bg.name    = '';
+  bg.drag    = null;
+  bg.adjust  = false;
+  canvas.style.cursor = '';
+  bgSyncControls();
+  render();
+  setStatus('Imagem de fundo removida');
+  toast('Imagem de fundo removida');
+}
+
 // ── RENDER ────────────────────────────────────────────────
 function render() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -3629,6 +3921,7 @@ function render() {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   if (state.showGrid)    drawGrid();
+  drawBackgroundImage();
   drawWorkspaceBorder();
   const dzViolations = findDeadzoneViolations();
   drawDeadzone(dzViolations);
@@ -3641,6 +3934,7 @@ function render() {
   if (state.showCritical) drawCriticalAlerts();
   drawPreview();
   drawMagneticIndicator();
+  drawBackgroundOverlay();
 }
 
 function drawGrid() {
@@ -4604,11 +4898,20 @@ function onMouseDown(e) {
     return;
   }
   if (e.button === 2) {
+    if (bg.adjust) { bgSetAdjust(false); return; }
     if (cancelPaste()) return;
     cancelCurrentTool();
     return;
   }
   if (e.button !== 0) return;
+
+  // Modo de ajuste da imagem de fundo: alças e arrasto têm prioridade
+  if (bg.adjust) {
+    const hit = bgHitTest(sx, sy);
+    if (hit) { bgBeginDrag(hit, wp); return; }
+    bgSetAdjust(false);
+    return;
+  }
 
   // Modo de colocação de colagem: clique confirma
   if (ui.pasteMode) { commitPaste(); return; }
@@ -4644,6 +4947,28 @@ function onMouseMove(e) {
 
   ui.mouseScreen = { x: sx, y: sy };
   ui.mouseWorld  = wp;
+
+  // Arrasto da imagem de fundo (mover, redimensionar ou girar)
+  if (bg.drag) {
+    bgUpdateDrag(wp, e.shiftKey);
+    const cx = document.getElementById('coord-x');
+    const cy = document.getElementById('coord-y');
+    if (cx) cx.textContent = wp.x.toFixed(2);
+    if (cy) cy.textContent = wp.y.toFixed(2);
+    const sc = document.getElementById('status-coord');
+    if (sc) sc.textContent = `X: ${wp.x.toFixed(2)} cm  Y: ${wp.y.toFixed(2)} cm`;
+    render();
+    return;
+  }
+
+  // Cursor contextual das alças no modo de ajuste
+  if (bg.adjust) {
+    const hit = bgHitTest(sx, sy);
+    canvas.style.cursor = !hit ? 'default'
+      : hit.mode === 'rotate' ? 'grab'
+      : hit.mode === 'move'   ? 'move'
+      : (hit.handle % 2 === 0 ? 'nesw-resize' : 'nwse-resize');
+  }
 
   // Snap magnético (ignora o próprio vértice que está sendo arrastado)
   ui.snapTarget = getMagneticSnap(sx, sy, ui.dragVertex, ui.dragMove ? ui.dragMove.ids : null);
@@ -4745,6 +5070,14 @@ function onMouseUp(e) {
     canvas.classList.remove('cursor-pan');
     return;
   }
+  if (e.button === 0 && bg.drag) {
+    bg.drag = null;
+    canvas.style.cursor = '';
+    bgSyncControls();
+    render();
+    setStatus('Imagem de fundo ajustada');
+    return;
+  }
   if (e.button === 0 && ui.dragMove) {
     finishMoveDrag();
     return;
@@ -4830,6 +5163,7 @@ function onKeyDown(e) {
   // Escape sempre funciona
   if (e.key === 'Escape') {
     e.preventDefault();
+    if (bg.adjust) { bgSetAdjust(false); return; }
     const lib = document.getElementById('curve-library');
     if (lib && !lib.classList.contains('hidden')) {
       const code = document.getElementById('curve-library-code');
@@ -4936,6 +5270,13 @@ function onKeyDown(e) {
 
   // Tab percorre os parâmetros do HUD aberto (não sai da janela).
   if (e.key === 'Tab' && !ctrl && !e.altKey && hudTabMove(e, !e.shiftKey)) return;
+
+  // Enter também conclui o ajuste da imagem de fundo
+  if (e.key === 'Enter' && bg.adjust) {
+    e.preventDefault();
+    bgSetAdjust(false);
+    return;
+  }
 
   if (inInput) return;
 
@@ -5448,6 +5789,64 @@ document.getElementById('line-width-input').addEventListener('change', () => {
   render();
 });
 
+// ── IMAGEM DE FUNDO ───────────────────────────────────────
+document.getElementById('btn-bg-load').addEventListener('click', () => {
+  document.getElementById('bg-image-input').click();
+});
+
+document.getElementById('bg-image-input').addEventListener('change', e => {
+  const file = e.target.files && e.target.files[0];
+  if (file) bgLoadImage(file);
+  e.target.value = '';
+});
+
+document.getElementById('bg-visible').addEventListener('change', e => {
+  bg.visible = e.target.checked;
+  render();
+});
+
+document.getElementById('bg-opacity').addEventListener('input', e => {
+  const v = parseFloat(e.target.value);
+  if (!Number.isFinite(v)) return;
+  bg.opacity = Math.min(1, Math.max(0.05, v / 100));
+  bgSyncControls();
+  render();
+});
+
+function bindBgNumber(id, apply) {
+  const el = document.getElementById(id);
+  el.addEventListener('input', () => {
+    if (!bg.image) return;
+    const v = parseFloat(el.value);
+    if (!Number.isFinite(v)) return;
+    apply(v);
+    render();
+  });
+}
+bindBgNumber('bg-width',    v => { bg.widthCm = Math.max(1, v); });
+bindBgNumber('bg-rotation', v => { bg.rotation = v; });
+bindBgNumber('bg-x',        v => { bg.x = v; });
+bindBgNumber('bg-y',        v => { bg.y = v; });
+
+document.getElementById('btn-bg-adjust').addEventListener('click', () => {
+  bgSetAdjust(!bg.adjust);
+});
+document.getElementById('btn-bg-fit').addEventListener('click', () => {
+  bgFitToWorkspace();
+  bgSyncControls();
+  render();
+  setStatus('Imagem encaixada na área de trabalho');
+});
+document.getElementById('btn-bg-center').addEventListener('click', () => {
+  bgCenter();
+  bgSyncControls();
+  render();
+  setStatus('Imagem centralizada');
+});
+document.getElementById('btn-bg-remove').addEventListener('click', bgRemove);
+
+bgSyncControls();
+
 // ── SAVE / LOAD ───────────────────────────────────────────
 function saveJSON() {
   const sp = readSpiralParams();
@@ -5704,7 +6103,7 @@ function exportPDF() {
     return { x:(x*drawScale+offX)*CM2SVG, y:(offY-y*drawScale)*CM2SVG };
   }
 
-  const bg   = invert ? '#000000' : '#ffffff';
+  const pageBg = invert ? '#000000' : '#ffffff';
   const fg   = invert ? '#ffffff' : '#1a1a2e';
   const pathColor = invert ? '#ffffff' : '#1a1a2e';
   const dijkColor = invert ? '#ffffff' : '#b8860b'; // branco em fundo preto, dourado em branco
@@ -5871,7 +6270,7 @@ function exportPDF() {
      width="${(svgW*CM2SVG).toFixed(0)}"
      height="${(svgH*CM2SVG).toFixed(0)}"
      viewBox="0 0 ${(svgW*CM2SVG).toFixed(0)} ${(svgH*CM2SVG).toFixed(0)}">
-  <rect width="100%" height="100%" fill="${bg}"/>
+  <rect width="100%" height="100%" fill="${pageBg}"/>
   ${paths}
 </svg>`;
 

@@ -651,6 +651,48 @@
       <div class="hud-hint" style="margin-top:4px;font-size:10px">Margem de alerta até a borda (não bloqueia)</div>
     </div>
 
+    <!-- Imagem de Fundo -->
+    <div class="panel-section bg-section">
+      <div class="panel-title">Imagem de Fundo</div>
+      <input type="file" id="bg-image-input" accept="image/*" style="display:none" />
+      <button id="btn-bg-load" class="panel-btn">Carregar imagem…</button>
+      <div class="bg-meta" id="bg-meta">Nenhuma imagem carregada</div>
+      <div class="prop-row prop-check">
+        <input type="checkbox" id="bg-visible" checked disabled />
+        <label for="bg-visible" class="prop-label">Mostrar imagem</label>
+      </div>
+      <div class="prop-row bg-opacity-row">
+        <label class="prop-label" for="bg-opacity">Opacidade</label>
+        <input type="range" id="bg-opacity" class="bg-range" min="5" max="100" step="5" value="40" disabled />
+        <span class="bg-opacity-val" id="bg-opacity-val">40%</span>
+      </div>
+      <div class="bg-grid">
+        <div class="prop-row">
+          <label class="prop-label">Largura (cm)</label>
+          <input type="number" id="bg-width" class="prop-input" value="0" step="1" min="1" disabled />
+        </div>
+        <div class="prop-row">
+          <label class="prop-label">Rotação (°)</label>
+          <input type="number" id="bg-rotation" class="prop-input" value="0" step="1" disabled />
+        </div>
+        <div class="prop-row">
+          <label class="prop-label">Centro X (cm)</label>
+          <input type="number" id="bg-x" class="prop-input" value="0" step="1" disabled />
+        </div>
+        <div class="prop-row">
+          <label class="prop-label">Centro Y (cm)</label>
+          <input type="number" id="bg-y" class="prop-input" value="0" step="1" disabled />
+        </div>
+      </div>
+      <div class="bg-actions">
+        <button id="btn-bg-adjust" class="panel-btn" disabled>Ajustar</button>
+        <button id="btn-bg-fit" class="panel-btn" disabled>Encaixar</button>
+        <button id="btn-bg-center" class="panel-btn" disabled>Centralizar</button>
+        <button id="btn-bg-remove" class="panel-btn" disabled>Remover</button>
+      </div>
+      <div class="hud-hint" style="margin-top:8px;font-size:10px">Fica atrás do desenho · não sai no PDF · só nesta sessão</div>
+    </div>
+
     <!-- Largura da Linha -->
     <div class="panel-section">
       <div class="panel-title">Espessura da Linha</div>

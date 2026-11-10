@@ -1631,12 +1631,13 @@ select.hud-input {
 }
 
 .panel-section:nth-of-type(1),
-.panel-section:nth-of-type(7) { border-top: 2px solid var(--red); }
-.panel-section:nth-of-type(2),
-.panel-section:nth-of-type(3) { border-top: 2px solid var(--yellow); }
-.panel-section:nth-of-type(4),
-.panel-section:nth-of-type(5) { border-top: 2px solid var(--blue); }
-.panel-section:nth-of-type(6) { border-top: 2px solid var(--green); }
+.panel-section:nth-of-type(8) { border-top: 2px solid var(--red); }
+.panel-section:nth-of-type(3),
+.panel-section:nth-of-type(4) { border-top: 2px solid var(--yellow); }
+.panel-section:nth-of-type(5),
+.panel-section:nth-of-type(6) { border-top: 2px solid var(--blue); }
+.panel-section:nth-of-type(7) { border-top: 2px solid var(--green); }
+.panel-section.bg-section { border-top: 2px solid var(--segment); }
 
 .panel-title {
   font-family: var(--font-ui);
@@ -1797,3 +1798,78 @@ select.hud-input {
   :root { --panel-w: 0px; }
   #panel-right { display: none; }
 }
+
+/* ── IMAGEM DE FUNDO ── */
+.bg-meta {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--text-dim);
+  line-height: 1.4;
+  margin: 7px 0 10px;
+  word-break: break-all;
+}
+
+.bg-meta.has-image { color: var(--segment); }
+
+.bg-opacity-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.bg-opacity-row .prop-label {
+  flex-shrink: 0;
+  width: 60px;
+}
+
+.bg-range {
+  flex: 1;
+  min-width: 0;
+  height: 4px;
+  accent-color: var(--segment);
+  cursor: pointer;
+}
+
+.bg-opacity-val {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--text-secondary);
+  width: 34px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.bg-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 8px;
+}
+
+.bg-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.bg-actions .panel-btn {
+  font-size: 10px;
+  padding: 6px 0;
+}
+
+.panel-btn.active {
+  border-color: var(--segment);
+  color: var(--segment);
+  background: rgba(34, 211, 238, 0.1);
+}
+
+.prop-input:disabled,
+.prop-select:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.prop-check input[type="checkbox"]:disabled { cursor: not-allowed; }
+.prop-check input[type="checkbox"]:disabled + .prop-label { opacity: 0.45; }
+
+.bg-range:disabled { opacity: 0.4; cursor: not-allowed; }
