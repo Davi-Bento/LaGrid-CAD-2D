@@ -2,7 +2,7 @@
 
 O LaGrid CAD 2D é o editor CAD da **Liga LARI — Liga Acadêmica de Robótica e Inovação**, desenvolvido para desenhar, medir e exportar pistas de seguidor de linha. O projeto roda 100% no navegador, sem servidor e sem etapa de build, com unidade base em centímetros, renderização em Canvas 2D e cálculo de percurso por Dijkstra.
 
-**GitHub Pages:** https://davi-bento.github.io/LaGrid-CAD-2D/
+https://davi-bento.github.io/LaGrid-CAD-2D/
 
 ## 1. Funcionalidades
 
